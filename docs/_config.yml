@@ -1,17 +1,17 @@
 title: "Straylight-AI"
 description: "Zero-knowledge credential proxy for AI agents. Keep API keys out of your agent's context window with self-hosted vault storage and MCP integration."
-url: "https://straylight-ai.github.io"
-baseurl: "/straylight"
+url: "https://aj-geddes.github.io"
+baseurl: "/straylight-ai"
 lang: "en"
 
 # Author / Organization
 author:
   name: "High Velocity Solutions LLC"
-  url: "https://github.com/straylight-ai"
+  url: "https://github.com/aj-geddes"
 
 # Repository
-repository: "straylight-ai/straylight"
-github_url: "https://github.com/straylight-ai/straylight"
+repository: "aj-geddes/straylight-ai"
+github_url: "https://github.com/aj-geddes/straylight-ai"
 
 # Build
 markdown: kramdown
@@ -36,7 +36,7 @@ twitter:
 social:
   name: "Straylight-AI"
   links:
-    - "https://github.com/straylight-ai/straylight"
+    - "https://github.com/aj-geddes/straylight-ai"
 
 # Sass
 sass:

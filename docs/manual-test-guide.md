@@ -19,7 +19,7 @@ without the credential ever appearing in Claude's context window.
 
 ```bash
 # Clone the repository (if you haven't already).
-git clone https://github.com/straylight-ai/straylight
+git clone https://github.com/aj-geddes/straylight-ai
 cd straylight
 
 # Build the container image.

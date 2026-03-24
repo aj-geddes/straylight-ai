@@ -36,7 +36,7 @@ npx straylight-ai
 
 This command:
 
-1. Pulls the `straylight-ai/straylight:0.1.0` Docker image from GitHub Container Registry
+1. Pulls the `aj-geddes/straylight-ai:0.1.0` Docker image from GitHub Container Registry
 2. Starts the container with a named volume for credential persistence
 3. Waits for the OpenBao vault to initialize and unseal
 4. Configures AppRole authentication
@@ -47,8 +47,8 @@ This command:
 
 ```
 Checking Docker... OK
-Pulling straylight-ai/straylight:0.1.0
-0.1.0: Pulling from straylight-ai/straylight
+Pulling aj-geddes/straylight-ai:0.1.0
+0.1.0: Pulling from aj-geddes/straylight-ai
 Digest: sha256:a3f2e1b4c5d6e7f8...
 Status: Downloaded newer image
 Starting container straylight-ai...
@@ -216,7 +216,7 @@ Your credentials are stored in a Docker named volume (`straylight-vault-data`) a
 To update to the latest version:
 
 ```bash
-docker pull ghcr.io/straylight-ai/straylight:latest
+docker pull ghcr.io/aj-geddes/straylight-ai:latest
 docker stop straylight-ai
 docker rm straylight-ai
 npx straylight-ai

@@ -115,7 +115,7 @@ Chose **Option 1: Go** because:
 
 - Use Go 1.22+ for improved routing (net/http.ServeMux pattern matching)
 - Use `go:embed` directive to bundle React build output
-- Structure as a Go module at `github.com/straylight-ai/straylight`
+- Structure as a Go module at `github.com/aj-geddes/straylight-ai`
 - Key packages:
   - `cmd/straylight/` -- main entry point
   - `internal/proxy/` -- HTTP reverse proxy with credential injection

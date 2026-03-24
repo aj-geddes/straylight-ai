@@ -217,7 +217,7 @@ Not currently. The Docker container bundles OpenBao vault, the Go backend, and t
 
 ### Is Straylight-AI open source?
 
-Yes. Straylight-AI is open source under the MIT License. The full source code is available at [https://github.com/straylight-ai/straylight](https://github.com/straylight-ai/straylight).
+Yes. Straylight-AI is open source under the MIT License. The full source code is available at [https://github.com/aj-geddes/straylight-ai](https://github.com/aj-geddes/straylight-ai).
 
 You can read every line of code, build the Docker image yourself, and fork the project.
 
@@ -231,7 +231,7 @@ Straylight-AI is built and maintained by High Velocity Solutions LLC. Contributi
 
 ### What is the project's license?
 
-[MIT License](https://github.com/straylight-ai/straylight/blob/main/LICENSE). You can use it commercially, modify it, distribute it, and use it privately without restrictions. The only requirement is retaining the copyright notice.
+[MIT License](https://github.com/aj-geddes/straylight-ai/blob/main/LICENSE). You can use it commercially, modify it, distribute it, and use it privately without restrictions. The only requirement is retaining the copyright notice.
 
 ---
 

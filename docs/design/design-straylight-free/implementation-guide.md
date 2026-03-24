@@ -30,7 +30,7 @@ Create this Go module structure at the project root:
 
 ```
 straylight-ai/
-  go.mod                           -- module github.com/straylight-ai/straylight
+  go.mod                           -- module github.com/aj-geddes/straylight-ai
   go.sum
   cmd/
     straylight/                    -- Main server binary
@@ -142,7 +142,7 @@ auto-unseals, the health endpoint returns 200, and the Web UI loads in a browser
 **Complexity**: S (Small)
 **Dependencies**: None
 **Deliverables**:
-- `go.mod` with module path `github.com/straylight-ai/straylight`
+- `go.mod` with module path `github.com/aj-geddes/straylight-ai`
 - `cmd/straylight/main.go` with cobra or plain flag-based CLI
   - Subcommands: `serve`, `health`, `version`
 - `internal/config/config.go` with config struct and YAML loading

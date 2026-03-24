@@ -8,10 +8,10 @@
 <p align="center"><em>Use AI, with Zero trust.</em></p>
 
 <p align="center">
-  <a href="https://github.com/straylight-ai/straylight/actions"><img src="https://img.shields.io/github/actions/workflow/status/straylight-ai/straylight/build.yml?branch=main&style=flat-square&label=build" alt="Build Status"></a>
-  <a href="https://github.com/straylight-ai/straylight/releases"><img src="https://img.shields.io/github/v/release/straylight-ai/straylight?style=flat-square&label=version" alt="Version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/straylight-ai/straylight?style=flat-square" alt="License: MIT"></a>
-  <a href="https://straylight-ai.github.io/straylight/docs/quickstart"><img src="https://img.shields.io/badge/docs-quickstart-4f46e5?style=flat-square" alt="Documentation"></a>
+  <a href="https://github.com/aj-geddes/straylight-ai/actions"><img src="https://img.shields.io/github/actions/workflow/status/aj-geddes/straylight-ai/build.yml?branch=main&style=flat-square&label=build" alt="Build Status"></a>
+  <a href="https://github.com/aj-geddes/straylight-ai/releases"><img src="https://img.shields.io/github/v/release/aj-geddes/straylight-ai?style=flat-square&label=version" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/aj-geddes/straylight-ai?style=flat-square" alt="License: MIT"></a>
+  <a href="https://aj-geddes.github.io/straylight-ai/docs/quickstart"><img src="https://img.shields.io/badge/docs-quickstart-4f46e5?style=flat-square" alt="Documentation"></a>
 </p>
 
 ## The Problem
@@ -307,24 +307,24 @@ docker run -d \
   -p 9470:9470 \
   -v ~/.straylight-ai/data:/data \
   --restart unless-stopped \
-  ghcr.io/straylight-ai/straylight:latest
+  ghcr.io/aj-geddes/straylight-ai:latest
 
 # Register MCP server (requires straylight-mcp binary on PATH)
 claude mcp add straylight-ai --transport stdio -- straylight-mcp
 ```
 
 Pre-built `straylight-mcp` binaries for each platform are available on the
-[Releases](https://github.com/straylight-ai/straylight/releases) page.
+[Releases](https://github.com/aj-geddes/straylight-ai/releases) page.
 
 ## Documentation
 
 | Guide | Description |
 |-------|-------------|
-| [Quick Start](https://straylight-ai.github.io/straylight/docs/quickstart) | 5-minute setup guide |
-| [User Guide](https://straylight-ai.github.io/straylight/docs/user-guide) | Complete reference |
-| [Features](https://straylight-ai.github.io/straylight/features/) | Detailed feature breakdown |
-| [Architecture](https://straylight-ai.github.io/straylight/architecture/) | Technical deep dive |
-| [FAQ](https://straylight-ai.github.io/straylight/docs/faq) | Common questions |
+| [Quick Start](https://aj-geddes.github.io/straylight-ai/docs/quickstart) | 5-minute setup guide |
+| [User Guide](https://aj-geddes.github.io/straylight-ai/docs/user-guide) | Complete reference |
+| [Features](https://aj-geddes.github.io/straylight-ai/features/) | Detailed feature breakdown |
+| [Architecture](https://aj-geddes.github.io/straylight-ai/architecture/) | Technical deep dive |
+| [FAQ](https://aj-geddes.github.io/straylight-ai/docs/faq) | Common questions |
 
 ## License
 
@@ -334,5 +334,5 @@ MIT — see [LICENSE](LICENSE)
 
 <p align="center">
   Built by <a href="https://highvelocitysolutions.com">High Velocity Solutions LLC</a><br>
-  <a href="https://straylight-ai.github.io/straylight/">Website</a> · <a href="https://straylight-ai.github.io/straylight/docs/quickstart">Docs</a> · <a href="https://github.com/straylight-ai/straylight/issues">Issues</a>
+  <a href="https://aj-geddes.github.io/straylight-ai/">Website</a> · <a href="https://aj-geddes.github.io/straylight-ai/docs/quickstart">Docs</a> · <a href="https://github.com/aj-geddes/straylight-ai/issues">Issues</a>
 </p>

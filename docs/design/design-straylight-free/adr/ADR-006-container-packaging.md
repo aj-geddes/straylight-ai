@@ -177,8 +177,8 @@ CMD ["serve"]
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --tag ghcr.io/straylight-ai/straylight:latest \
-  --tag ghcr.io/straylight-ai/straylight:1.0.0 \
+  --tag ghcr.io/aj-geddes/straylight-ai:latest \
+  --tag ghcr.io/aj-geddes/straylight-ai:1.0.0 \
   --push \
   .
 ```
@@ -191,7 +191,7 @@ docker run -d \
   -p 9470:9470 \
   -v ~/.straylight-ai/data:/data \
   --restart unless-stopped \
-  ghcr.io/straylight-ai/straylight:latest
+  ghcr.io/aj-geddes/straylight-ai:latest
 ```
 
 ### Port Mapping

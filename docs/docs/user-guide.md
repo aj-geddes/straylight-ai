@@ -365,7 +365,7 @@ For a persistent, auto-starting setup:
 version: "3.9"
 services:
   straylight:
-    image: ghcr.io/straylight-ai/straylight:0.1.0
+    image: ghcr.io/aj-geddes/straylight-ai:0.1.0
     container_name: straylight-ai
     restart: unless-stopped
     ports:

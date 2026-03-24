@@ -166,7 +166,7 @@ npx straylight-ai update       # Pull latest image, restart container
      -p 9470:9470 \
      -v ~/.straylight-ai/data:/data \
      --restart unless-stopped \
-     ghcr.io/straylight-ai/straylight:latest
+     ghcr.io/aj-geddes/straylight-ai:latest
 5. Poll health endpoint until ready (max 30s)
 6. Detect Claude Code installation
    a. If found: run `claude mcp add --transport stdio straylight -- straylight-mcp`

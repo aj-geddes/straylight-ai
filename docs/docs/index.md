@@ -43,9 +43,9 @@ how it compares to alternatives, and how to add custom services.
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/straylight-ai/straylight)
-- [Report a Bug](https://github.com/straylight-ai/straylight/issues)
-- [Releases](https://github.com/straylight-ai/straylight/releases)
+- [GitHub Repository](https://github.com/aj-geddes/straylight-ai)
+- [Report a Bug](https://github.com/aj-geddes/straylight-ai/issues)
+- [Releases](https://github.com/aj-geddes/straylight-ai/releases)
 
 ## Prerequisites
 
