@@ -51,19 +51,10 @@ collections:
 
 defaults:
   - scope:
-      path: ""
+      path: "docs"
       type: "docs"
     values:
       layout: "doc"
-  - scope:
-      path: ""
-      type: "pages"
-    values:
-      layout: "default"
-  - scope:
-      path: "index.html"
-    values:
-      layout: "default"
 
 # Exclude from build
 exclude:
