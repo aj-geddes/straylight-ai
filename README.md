@@ -74,24 +74,50 @@ never enter the conversation.
 
 ## How It Works
 
+```mermaid
+flowchart LR
+    subgraph Host["Your Machine"]
+        A["Claude Code\n/ AI Agent"] -->|stdio| B["straylight-mcp\n(MCP shim)"]
+    end
+
+    subgraph Container["Docker Container (localhost:9470)"]
+        B -->|HTTP| C["Straylight-AI\nCore (Go)"]
+        C --> D["OpenBao\n(encrypted vault)"]
+        C --> E["HTTP Proxy\n(credential injection)"]
+        D -.->|"fetch secret"| E
+    end
+
+    E -->|"Authorization: Bearer ••••••"| F["External API\n(Stripe, GitHub, ...)"]
+    F -->|"response (sanitized)"| C
+    C -->|"clean data"| A
+
+    style A fill:#4f46e5,color:#fff,stroke:#4338ca
+    style D fill:#059669,color:#fff,stroke:#047857
+    style E fill:#d97706,color:#fff,stroke:#b45309
+    style F fill:#64748b,color:#fff,stroke:#475569
 ```
-+--------------------------+         +----------------------------------+
-|  Claude Code / Agent     |         |  Docker Container (localhost)    |
-|                          |  stdio  |                                  |
-|  straylight-mcp (shim)  +-------->+  Straylight-AI Core (Go :9470)  |
-|                          |         |           |                      |
-+--------------------------+         |           v                      |
-                                     |    OpenBao (encrypted vault)    |
-                                     |           |                      |
-                                     |           v                      |
-                                     |    HTTP Proxy (credential       |
-                                     |    injected at transport layer) |
-                                     +----------------------------------+
-                                                 |
-                                                 v
-                                      External API (Stripe, GitHub, ...)
-                                      (sees authenticated request,
-                                       agent never sees the token)
+
+### Data Flow
+
+```mermaid
+sequenceDiagram
+    participant Agent as Claude Code
+    participant MCP as straylight-mcp
+    participant Core as Straylight Core
+    participant Vault as OpenBao Vault
+    participant API as External API
+
+    Agent->>MCP: api_call("github", "GET /user")
+    MCP->>Core: HTTP POST /api/v1/mcp/tool-call
+    Core->>Vault: Read secret for "github"
+    Vault-->>Core: ghp_••••••••
+    Core->>API: GET /user (Authorization: Bearer ghp_••••••••)
+    API-->>Core: {"login": "aj-geddes", ...}
+    Core->>Core: Sanitize output (strip credential patterns)
+    Core-->>MCP: {"login": "aj-geddes", ...}
+    MCP-->>Agent: Clean response (no credentials)
+
+    Note over Agent: Agent gets data.<br/>Never sees the token.
 ```
 
 The `straylight-mcp` shim runs on your host and communicates with Claude Code via
