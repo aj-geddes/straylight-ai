@@ -1,0 +1,562 @@
+---
+layout: default
+title: "Architecture — Docker Container, MCP, Vault Internals"
+description: "Straylight-AI architecture: Docker container internals, data flow from AI agent through MCP server to OpenBao vault to external API, security layers. All diagrams in HTML/SVG."
+permalink: /architecture/
+---
+
+<section class="features-page-hero">
+  <div class="container">
+    <div class="section-label">Architecture</div>
+    <h1 class="section-title">How Straylight-AI is built</h1>
+    <p class="section-subtitle">
+      A self-hosted Docker container housing four cooperating components: an MCP server,
+      an HTTP proxy, an OpenBao vault, and a React dashboard. Every component is
+      stateless except the vault &mdash; credentials survive restarts, everything else is ephemeral.
+    </p>
+  </div>
+</section>
+
+<!-- Docker Container Internals -->
+<section class="section" id="container" aria-labelledby="container-heading">
+  <div class="container">
+    <div class="section-label">Container Architecture</div>
+    <h2 id="container-heading" class="section-title">What's inside the Docker container</h2>
+    <p class="section-subtitle">
+      One <code>docker run</code> command starts all four components. They communicate
+      via localhost — no external network exposure for inter-component traffic.
+    </p>
+
+    <div class="arch-diagram" role="img" aria-label="Docker container architecture showing four components: MCP server, HTTP proxy, OpenBao vault, and React dashboard">
+      <svg viewBox="0 0 800 520" width="100%" xmlns="http://www.w3.org/2000/svg" style="max-height:520px">
+
+        <!-- Outer Docker container border -->
+        <rect x="10" y="30" width="780" height="480" rx="16" fill="none" stroke="#4f46e5" stroke-width="2" stroke-dasharray="10 5"/>
+        <rect x="60" y="22" width="170" height="22" rx="4" fill="#4f46e5"/>
+        <text x="145" y="37" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Docker Container: straylight-ai</text>
+
+        <!-- ====== Component 1: MCP Server ====== -->
+        <rect x="30" y="60" width="200" height="180" rx="12" fill="var(--color-primary-light)" stroke="var(--color-primary)" stroke-width="1.5"/>
+        <rect x="55" y="53" width="100" height="18" rx="4" fill="var(--color-primary)"/>
+        <text x="105" y="66" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">MCP Server :4243</text>
+
+        <text x="130" y="95" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-primary)">MCP Server</text>
+        <text x="130" y="110" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Go + MCP SDK</text>
+
+        <!-- MCP tools listed -->
+        <rect x="45" y="120" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="134" text-anchor="middle" font-size="9" fill="var(--color-text)" font-family="monospace">api_call</text>
+
+        <rect x="45" y="146" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="160" text-anchor="middle" font-size="9" fill="var(--color-text)" font-family="monospace">exec</text>
+
+        <rect x="45" y="172" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="186" text-anchor="middle" font-size="9" fill="var(--color-text)" font-family="monospace">check</text>
+
+        <rect x="45" y="198" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="212" text-anchor="middle" font-size="9" fill="var(--color-text)" font-family="monospace">services</text>
+
+        <!-- ====== Component 2: HTTP Proxy ====== -->
+        <rect x="270" y="60" width="200" height="180" rx="12" fill="#f0fdf4" stroke="#059669" stroke-width="1.5"/>
+        <rect x="290" y="53" width="120" height="18" rx="4" fill="#059669"/>
+        <text x="350" y="66" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">HTTP Proxy (internal)</text>
+
+        <text x="370" y="95" text-anchor="middle" font-size="10" font-weight="700" fill="#059669">HTTP Proxy</text>
+        <text x="370" y="110" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">net/http RoundTripper</text>
+
+        <!-- Proxy responsibilities -->
+        <rect x="285" y="120" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="134" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Credential injection</text>
+
+        <rect x="285" y="146" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="160" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Response sanitization</text>
+
+        <rect x="285" y="172" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="186" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">TLS termination</text>
+
+        <rect x="285" y="198" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="212" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Request logging</text>
+
+        <!-- ====== Component 3: OpenBao Vault ====== -->
+        <rect x="30" y="290" width="200" height="180" rx="12" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+        <rect x="50" y="283" width="120" height="18" rx="4" fill="#d97706"/>
+        <text x="110" y="296" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">OpenBao Vault :8200</text>
+
+        <text x="130" y="325" text-anchor="middle" font-size="10" font-weight="700" fill="#d97706">OpenBao Vault</text>
+        <text x="130" y="340" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Apache 2.0 Vault fork</text>
+
+        <rect x="45" y="350" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="364" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">AES-256-GCM at rest</text>
+
+        <rect x="45" y="376" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="390" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">AppRole authentication</text>
+
+        <rect x="45" y="402" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="416" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Auto-init + auto-unseal</text>
+
+        <rect x="45" y="428" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="130" y="442" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Persistent volume mount</text>
+
+        <!-- ====== Component 4: React Dashboard ====== -->
+        <rect x="270" y="290" width="200" height="180" rx="12" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+        <rect x="285" y="283" width="130" height="18" rx="4" fill="#7c3aed"/>
+        <text x="350" y="296" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">Dashboard :4242 (HTTP)</text>
+
+        <text x="370" y="325" text-anchor="middle" font-size="10" font-weight="700" fill="#7c3aed">React Dashboard</text>
+        <text x="370" y="340" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Vite + React + TypeScript</text>
+
+        <rect x="285" y="350" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="364" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Service wizard</text>
+
+        <rect x="285" y="376" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="390" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Account enrichment</text>
+
+        <rect x="285" y="402" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="416" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Light / dark mode</text>
+
+        <rect x="285" y="428" width="170" height="20" rx="4" fill="var(--color-surface)" stroke="var(--color-border)"/>
+        <text x="370" y="442" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">REST API backend</text>
+
+        <!-- ====== Arrows between components ====== -->
+        <!-- MCP -> Proxy -->
+        <line x1="230" y1="150" x2="268" y2="150" stroke="var(--color-primary)" stroke-width="1.8" marker-end="url(#a1)"/>
+        <text x="249" y="143" text-anchor="middle" font-size="7" fill="var(--color-primary)">proxy call</text>
+
+        <!-- Proxy -> Vault -->
+        <line x1="370" y1="240" x2="240" y2="310" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#a2)"/>
+        <text x="330" y="280" font-size="7" fill="#d97706">fetch secret</text>
+
+        <!-- MCP -> Vault -->
+        <line x1="130" y1="240" x2="130" y2="288" stroke="#d97706" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#a2)"/>
+        <text x="140" y="268" font-size="7" fill="#d97706">auth</text>
+
+        <!-- Dashboard -> Vault -->
+        <line x1="370" y1="290" x2="233" y2="390" stroke="#7c3aed" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#a3)"/>
+        <text x="330" y="355" font-size="7" fill="#7c3aed">CRUD secrets</text>
+
+        <!-- ====== External actors ====== -->
+        <!-- AI Agent (outside container) -->
+        <rect x="530" y="80" width="110" height="55" rx="8" fill="var(--color-bg-alt)" stroke="var(--color-border)" stroke-width="1.5"/>
+        <text x="585" y="105" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">AI Agent</text>
+        <text x="585" y="120" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Claude Code / Cursor</text>
+
+        <!-- Agent -> MCP arrow (through container boundary) -->
+        <line x1="530" y1="107" x2="240" y2="150" stroke="var(--color-primary)" stroke-width="2" marker-end="url(#a1)"/>
+        <text x="400" y="115" text-anchor="middle" font-size="8" fill="var(--color-primary)">MCP protocol (stdio)</text>
+
+        <!-- External API -->
+        <rect x="530" y="200" width="110" height="55" rx="8" fill="var(--color-bg-alt)" stroke="var(--color-border)"/>
+        <text x="585" y="225" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">External API</text>
+        <text x="585" y="240" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">GitHub, Stripe, etc.</text>
+
+        <!-- Proxy -> External API -->
+        <line x1="470" y1="175" x2="530" y2="220" stroke="#059669" stroke-width="1.5" marker-end="url(#a4)"/>
+        <text x="510" y="193" font-size="8" fill="#059669" text-anchor="middle">HTTPS + auth</text>
+
+        <!-- Developer / browser -->
+        <rect x="530" y="340" width="110" height="55" rx="8" fill="var(--color-bg-alt)" stroke="var(--color-border)"/>
+        <text x="585" y="365" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">Developer</text>
+        <text x="585" y="380" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Browser (localhost)</text>
+
+        <line x1="530" y1="367" x2="475" y2="390" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#a3)"/>
+        <text x="515" y="382" font-size="8" fill="#7c3aed" text-anchor="middle">HTTP :4242</text>
+
+        <!-- Persistent storage indicator -->
+        <rect x="50" y="480" width="160" height="22" rx="6" fill="#fef3c7" stroke="#d97706"/>
+        <text x="130" y="495" text-anchor="middle" font-size="8" fill="#d97706" font-weight="600">docker volume: vault-data</text>
+
+        <line x1="130" y1="470" x2="130" y2="479" stroke="#d97706" stroke-width="1.5"/>
+
+        <!-- Arrow markers -->
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-primary)"/>
+          </marker>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+          </marker>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+          </marker>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- Data Flow -->
+<section class="section section--alt" id="data-flow" aria-labelledby="flow-heading">
+  <div class="container">
+    <div class="section-label">Data Flow</div>
+    <h2 id="flow-heading" class="section-title">Request lifecycle: agent to API and back</h2>
+    <p class="section-subtitle">
+      Tracing a single <code>api_call</code> request from the AI agent through every
+      component and back, showing exactly where credentials are handled and where they are not.
+    </p>
+
+    <div class="flow-timeline">
+      <div class="flow-event">
+        <div class="flow-event-num">1</div>
+        <div class="flow-event-content">
+          <h3>Agent invokes <code>api_call</code> MCP tool</h3>
+          <p>Claude Code calls the tool with parameters: <code>{"service": "github", "method": "GET", "path": "/user"}</code>. No credential is in this call.</p>
+          <div class="flow-event-label flow-event-label--safe">No credential in request</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">2</div>
+        <div class="flow-event-content">
+          <h3>MCP server receives the tool call</h3>
+          <p>The Go MCP server parses the JSON parameters and identifies the service name <code>"github"</code>. It knows the service's base URL and auth method from the template, but does not yet have the credential value.</p>
+          <div class="flow-event-label flow-event-label--safe">Service config only, no credential value</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">3</div>
+        <div class="flow-event-content">
+          <h3>MCP server requests a credential-injecting transport</h3>
+          <p>The MCP server calls an internal function to obtain an <code>http.RoundTripper</code> configured for the GitHub service. This function retrieves the credential from the vault and binds it to the transport — but returns the transport, not the credential.</p>
+          <div class="flow-event-label flow-event-label--warning">Credential fetched from vault, bound to transport object</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">4</div>
+        <div class="flow-event-content">
+          <h3>Vault authenticates and returns the secret</h3>
+          <p>OpenBao verifies the AppRole credentials (RoleID + SecretID), checks the policy allows reading <code>secret/github</code>, decrypts the AES-256-GCM ciphertext, and returns the plaintext PAT value to the Go process memory.</p>
+          <div class="flow-event-label flow-event-label--warning">Credential in Go process memory (not agent memory)</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">5</div>
+        <div class="flow-event-content">
+          <h3>HTTP request sent with injected Authorization header</h3>
+          <p>The transport's <code>RoundTrip</code> method adds <code>Authorization: token ghp_xxxxx</code> to the outgoing request headers. This happens at the <code>net/http</code> layer, after MCP tool parameter parsing is complete.</p>
+          <div class="flow-event-label flow-event-label--warning">Credential in HTTP headers (not in MCP layer)</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">6</div>
+        <div class="flow-event-content">
+          <h3>GitHub API responds</h3>
+          <p>GitHub's API processes the request and returns JSON. In some edge cases (rate limit, auth error), GitHub may echo parts of the token in error messages.</p>
+          <div class="flow-event-label flow-event-label--warning">Response may contain credential fragments</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">7</div>
+        <div class="flow-event-content">
+          <h3>Output sanitizer scans the response</h3>
+          <p>The response body is passed through the two-layer sanitizer. Regex patterns match common credential formats. Value matching checks for the exact stored PAT value. Any matches are replaced with <code>[REDACTED]</code>.</p>
+          <div class="flow-event-label flow-event-label--safe">Credentials stripped before agent receives response</div>
+        </div>
+      </div>
+
+      <div class="flow-event">
+        <div class="flow-event-num">8</div>
+        <div class="flow-event-content">
+          <h3>Sanitized response returned to MCP tool, then agent</h3>
+          <p>The cleaned JSON is returned as the MCP tool result. Claude Code receives it and can use the data (username, repos, etc.) in its context. No credential value ever entered the agent's context window.</p>
+          <div class="flow-event-label flow-event-label--safe">Zero-knowledge guarantee achieved</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Security Layers Diagram -->
+<section class="section" id="security-arch" aria-labelledby="security-arch-heading">
+  <div class="container">
+    <div class="section-label">Security Architecture</div>
+    <h2 id="security-arch-heading" class="section-title">Defense in depth — 5 independent layers</h2>
+    <p class="section-subtitle">
+      Each security layer is independent. Bypassing one does not compromise the others.
+      An attacker who achieves code execution inside the Docker container still cannot
+      exfiltrate credentials to the AI agent context window without defeating all five layers.
+    </p>
+
+    <div class="security-arch-diagram" role="img" aria-label="Security layers diagram showing five concentric defense rings around the vault">
+      <svg viewBox="0 0 700 420" width="100%" xmlns="http://www.w3.org/2000/svg" style="max-height:420px">
+        <!-- Layer 5 (outermost) -->
+        <ellipse cx="350" cy="210" rx="330" ry="185" fill="none" stroke="#e2e8f0" stroke-width="24" opacity="0.5"/>
+        <text x="350" y="30" text-anchor="middle" font-size="10" fill="var(--color-text-muted)" font-weight="600">LAYER 5 — CLAUDE CODE HOOKS (PreToolUse + PostToolUse)</text>
+
+        <!-- Layer 4 -->
+        <ellipse cx="350" cy="210" rx="270" ry="150" fill="none" stroke="#dbeafe" stroke-width="24" opacity="0.6"/>
+        <text x="350" y="68" text-anchor="middle" font-size="10" fill="#1e40af" font-weight="600">LAYER 4 — OUTPUT SANITIZATION</text>
+
+        <!-- Layer 3 -->
+        <ellipse cx="350" cy="210" rx="210" ry="115" fill="none" stroke="#d1fae5" stroke-width="24" opacity="0.7"/>
+        <text x="350" y="103" text-anchor="middle" font-size="10" fill="#065f46" font-weight="600">LAYER 3 — TRANSPORT INJECTION</text>
+
+        <!-- Layer 2 -->
+        <ellipse cx="350" cy="210" rx="150" ry="80" fill="none" stroke="#fef3c7" stroke-width="24" opacity="0.8"/>
+        <text x="350" y="138" text-anchor="middle" font-size="10" fill="#92400e" font-weight="600">LAYER 2 — APPROLE AUTH</text>
+
+        <!-- Layer 1 (innermost) -->
+        <ellipse cx="350" cy="210" rx="90" ry="45" fill="#fef3c7" stroke="#d97706" stroke-width="2"/>
+        <text x="350" y="200" text-anchor="middle" font-size="10" font-weight="700" fill="#d97706">LAYER 1</text>
+        <text x="350" y="215" text-anchor="middle" font-size="9" fill="#92400e">Vault Encryption</text>
+        <text x="350" y="228" text-anchor="middle" font-size="8" fill="#92400e">AES-256-GCM</text>
+
+        <!-- Labels on right side -->
+        <line x1="440" y1="210" x2="510" y2="190" stroke="#d97706" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="515" y="188" font-size="8" fill="#92400e">Secrets at rest</text>
+        <text x="515" y="200" font-size="8" fill="#92400e">encrypted, key separate</text>
+
+        <line x1="498" y1="210" x2="565" y2="230" stroke="#b45309" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="568" y="228" font-size="8" fill="#b45309">RoleID ≠ SecretID</text>
+        <text x="568" y="240" font-size="8" fill="#b45309">short-lived tokens</text>
+
+        <line x1="555" y1="210" x2="610" y2="260" stroke="#065f46" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="613" y="258" font-size="8" fill="#065f46">Credential in http</text>
+        <text x="613" y="270" font-size="8" fill="#065f46">layer only</text>
+
+        <line x1="614" y1="210" x2="648" y2="310" stroke="#1e40af" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="650" y="308" font-size="8" fill="#1e40af">Regex + value</text>
+        <text x="650" y="320" font-size="8" fill="#1e40af">matching</text>
+
+        <line x1="666" y1="210" x2="680" y2="370" stroke="var(--color-border-strong)" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="680" y="368" font-size="8" fill="var(--color-text-muted)">Block .env reads</text>
+        <text x="680" y="380" font-size="8" fill="var(--color-text-muted)">sanitize output</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- Tech Stack -->
+<section class="section section--alt" id="stack" aria-labelledby="stack-heading">
+  <div class="container">
+    <div class="section-label">Technology Stack</div>
+    <h2 id="stack-heading" class="section-title">Built with production-proven tools</h2>
+
+    <div class="stack-grid">
+      <div class="stack-category">
+        <h3>Backend (Go)</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Go 1.23+</strong>
+            <span>MCP server, HTTP proxy, vault client, output sanitizer</span>
+          </li>
+          <li>
+            <strong>net/http + RoundTripper</strong>
+            <span>Transport-layer credential injection</span>
+          </li>
+          <li>
+            <strong>hashicorp/vault/api</strong>
+            <span>OpenBao client (fully compatible)</span>
+          </li>
+          <li>
+            <strong>mark3labs/mcp-go</strong>
+            <span>MCP protocol implementation</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Vault</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>OpenBao 2.x</strong>
+            <span>Apache 2.0 fork of HashiCorp Vault, drop-in compatible</span>
+          </li>
+          <li>
+            <strong>KV Secrets Engine v2</strong>
+            <span>Versioned key-value secret storage</span>
+          </li>
+          <li>
+            <strong>AppRole Auth Method</strong>
+            <span>Machine-to-machine authentication</span>
+          </li>
+          <li>
+            <strong>Shamir Secret Sharing</strong>
+            <span>Auto-unseal via derived key on restart</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Frontend (React)</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>React 18 + TypeScript</strong>
+            <span>Dashboard UI with strict type checking</span>
+          </li>
+          <li>
+            <strong>Vite</strong>
+            <span>Build tooling, dev server, HMR</span>
+          </li>
+          <li>
+            <strong>Tailwind CSS</strong>
+            <span>Utility-first styling, dark mode via class strategy</span>
+          </li>
+          <li>
+            <strong>React Router</strong>
+            <span>Client-side routing between dashboard views</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Infrastructure</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Docker + Docker Compose</strong>
+            <span>Single-container deployment, named volumes for persistence</span>
+          </li>
+          <li>
+            <strong>Node.js / npx</strong>
+            <span>One-command install and Claude Code registration</span>
+          </li>
+          <li>
+            <strong>GitHub Actions</strong>
+            <span>CI/CD, Docker image build and push</span>
+          </li>
+          <li>
+            <strong>GitHub Container Registry</strong>
+            <span>Image distribution: ghcr.io/straylight-ai/straylight</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% include cta.html %}
+
+<style>
+.flow-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+
+.flow-timeline::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-border);
+}
+
+@media (min-width: 640px) {
+  .flow-timeline::before { left: 24px; }
+}
+
+.flow-event {
+  display: flex;
+  gap: var(--space-5);
+  padding-bottom: var(--space-6);
+  position: relative;
+}
+
+.flow-event-num {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 800;
+  font-size: var(--text-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+  margin-top: 2px;
+}
+
+.flow-event-content {
+  flex: 1;
+  padding-top: var(--space-1);
+}
+
+.flow-event-content h3 {
+  font-size: var(--text-base);
+  font-weight: 700;
+  margin-bottom: var(--space-2);
+}
+
+.flow-event-content p {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--leading-relaxed);
+  margin-bottom: var(--space-2);
+}
+
+.flow-event-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 3px var(--space-3);
+  border-radius: var(--radius-full);
+}
+
+.flow-event-label--safe    { background: var(--color-success-light); color: var(--color-success); }
+.flow-event-label--warning { background: var(--color-warning-light); color: var(--color-warning); }
+
+.stack-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6);
+}
+
+@media (min-width: 768px) { .stack-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.stack-category h3 {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.stack-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.stack-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stack-list strong {
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.stack-list span {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+
+.security-arch-diagram {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-6);
+  overflow: auto;
+}
+</style>

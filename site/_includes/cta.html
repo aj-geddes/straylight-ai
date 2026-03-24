@@ -1,0 +1,35 @@
+<section class="cta-section" aria-labelledby="cta-heading">
+  <div class="container">
+    <div class="cta-card">
+      <div class="cta-content">
+        <h2 id="cta-heading">Get started in 2 minutes</h2>
+        <p>One command installs and configures everything. Your AI agent will be making secure API calls before your next coffee.</p>
+        <div class="cta-actions">
+          <a href="{{ site.baseurl }}/docs/quickstart/" class="btn btn-primary btn-lg">Read the Quickstart</a>
+          <a href="{{ site.github_url }}" class="btn btn-outline-white btn-lg" target="_blank" rel="noopener noreferrer">Star on GitHub</a>
+        </div>
+      </div>
+      <div class="cta-terminal" aria-hidden="true">
+        <div class="terminal">
+          <div class="terminal-header">
+            <span class="terminal-dot terminal-dot--red"></span>
+            <span class="terminal-dot terminal-dot--yellow"></span>
+            <span class="terminal-dot terminal-dot--green"></span>
+            <span class="terminal-title">Terminal</span>
+          </div>
+          <div class="terminal-body">
+            <div class="terminal-line">
+              <span class="terminal-prompt">$</span>
+              <span class="terminal-cmd">npx straylight-ai</span>
+            </div>
+            <div class="terminal-line terminal-output">Pulling straylight-ai/straylight:latest...</div>
+            <div class="terminal-line terminal-output">Starting OpenBao vault...</div>
+            <div class="terminal-line terminal-output">Vault initialized and unsealed</div>
+            <div class="terminal-line terminal-output">MCP server registered with Claude Code</div>
+            <div class="terminal-line terminal-success">Straylight-AI running at http://localhost:4242</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,23 @@
+services:
+  straylight:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "9470:9470"
+    volumes:
+      - straylight-data:/data
+    restart: unless-stopped
+    # Security hardening (WP-2.6):
+    # read_only filesystem prevents persistent writes outside of mounted volumes.
+    # /tmp is mounted as a tmpfs to allow scratch space without disk writes.
+    read_only: true
+    tmpfs:
+      - /tmp:size=10M
+    # cap_drop ALL removes all Linux capabilities; add back only what is needed.
+    # Straylight runs on port 9470 (>1024) so no CAP_NET_BIND_SERVICE is required.
+    cap_drop:
+      - ALL
+
+volumes:
+  straylight-data:

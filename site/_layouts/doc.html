@@ -1,0 +1,78 @@
+---
+layout: default
+---
+<div class="doc-wrapper">
+  <aside class="doc-sidebar" aria-label="Documentation navigation">
+    <nav class="doc-nav">
+      <div class="doc-nav-section">
+        <span class="doc-nav-label">Getting Started</span>
+        <ul>
+          <li><a href="{{ site.baseurl }}/docs/" {% if page.url contains '/docs/' and page.url == '/docs/' %}class="active"{% endif %}>Overview</a></li>
+          <li><a href="{{ site.baseurl }}/docs/quickstart/" {% if page.url contains 'quickstart' %}class="active"{% endif %}>Quickstart</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-section">
+        <span class="doc-nav-label">Guides</span>
+        <ul>
+          <li><a href="{{ site.baseurl }}/docs/user-guide/" {% if page.url contains 'user-guide' %}class="active"{% endif %}>User Guide</a></li>
+          <li><a href="{{ site.baseurl }}/docs/faq/" {% if page.url contains 'faq' %}class="active"{% endif %}>FAQ</a></li>
+        </ul>
+      </div>
+      <div class="doc-nav-section">
+        <span class="doc-nav-label">Reference</span>
+        <ul>
+          <li><a href="{{ site.baseurl }}/features/">Features</a></li>
+          <li><a href="{{ site.baseurl }}/architecture/">Architecture</a></li>
+        </ul>
+      </div>
+    </nav>
+  </aside>
+
+  <div class="doc-main">
+    <!-- Breadcrumbs -->
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        <li><a href="{{ site.baseurl }}/">Home</a></li>
+        <li><a href="{{ site.baseurl }}/docs/">Docs</a></li>
+        <li><span aria-current="page">{{ page.title }}</span></li>
+      </ol>
+    </nav>
+
+    <article class="doc-content">
+      <header class="doc-header">
+        <h1>{{ page.title }}</h1>
+        {% if page.description %}
+        <p class="doc-lead">{{ page.description }}</p>
+        {% endif %}
+      </header>
+
+      <!-- Table of Contents -->
+      {% if page.toc != false %}
+      <div class="toc" aria-label="Table of contents">
+        <span class="toc-label">On this page</span>
+        <nav id="toc-nav"></nav>
+      </div>
+      {% endif %}
+
+      <div class="doc-body">
+        {{ content }}
+      </div>
+    </article>
+
+    <!-- Prev / Next navigation -->
+    <nav class="doc-pagination" aria-label="Documentation navigation">
+      {% if page.prev_page %}
+      <a href="{{ site.baseurl }}{{ page.prev_page.url }}" class="doc-pagination__prev">
+        <span class="doc-pagination__dir">Previous</span>
+        <span class="doc-pagination__title">{{ page.prev_page.title }}</span>
+      </a>
+      {% endif %}
+      {% if page.next_page %}
+      <a href="{{ site.baseurl }}{{ page.next_page.url }}" class="doc-pagination__next">
+        <span class="doc-pagination__dir">Next</span>
+        <span class="doc-pagination__title">{{ page.next_page.title }}</span>
+      </a>
+      {% endif %}
+    </nav>
+  </div>
+</div>

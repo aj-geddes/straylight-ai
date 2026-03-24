@@ -1,0 +1,584 @@
+---
+layout: default
+title: "AI Agent Credential Proxy — Zero-Knowledge Secret Management"
+description: "Straylight-AI keeps API keys out of AI agent context windows. Self-hosted Docker container with OpenBao vault, MCP integration for Claude Code and Cursor. Open source, MIT license."
+permalink: /
+json_ld:
+  "@context": "https://schema.org"
+  "@type": "SoftwareApplication"
+  "name": "Straylight-AI"
+  "applicationCategory": "DeveloperApplication"
+  "operatingSystem": "Linux, macOS, Windows"
+  "description": "Zero-knowledge credential proxy for AI agents. Keeps API keys out of agent context windows using self-hosted vault storage and MCP integration."
+  "url": "https://straylight-ai.github.io/straylight"
+  "downloadUrl": "https://github.com/straylight-ai/straylight"
+  "license": "https://opensource.org/licenses/MIT"
+  "version": "0.1.0"
+  "author":
+    "@type": "Organization"
+    "name": "High Velocity Solutions LLC"
+  "offers":
+    "@type": "Offer"
+    "price": "0"
+    "priceCurrency": "USD"
+---
+
+{% include hero.html %}
+
+<!-- =================== THE PROBLEM =================== -->
+<section class="section section--alt" id="problem" aria-labelledby="problem-heading">
+  <div class="container">
+    <div class="section-label">The Problem</div>
+    <h2 id="problem-heading" class="section-title">AI agents are leaking your credentials</h2>
+    <p class="section-subtitle">
+      Every time an AI coding assistant reads your <code>.env</code> file, accesses shell history,
+      or processes log output, your API keys enter its context window. From there, they can be
+      echoed in responses, logged to disk, or exfiltrated through prompt injection attacks.
+    </p>
+
+    <div class="problem-grid">
+      <div class="problem-card problem-card--danger">
+        <div class="problem-card-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </div>
+        <h3>CVE-2025-59536</h3>
+        <p>Prompt injection via crafted API responses causes AI coding assistants to echo stored credentials in subsequent tool outputs, bypassing context isolation.</p>
+        <span class="severity-badge severity-badge--high">CVSS 8.1 High</span>
+      </div>
+
+      <div class="problem-card problem-card--danger">
+        <div class="problem-card-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </div>
+        <h3>CVE-2026-21852</h3>
+        <p>AI agent log capture during automated test runs exposes environment variable values including cloud provider credentials, database passwords, and payment API keys.</p>
+        <span class="severity-badge severity-badge--critical">CVSS 9.3 Critical</span>
+      </div>
+
+      <div class="problem-card problem-card--warning">
+        <div class="problem-card-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        </div>
+        <h3>.env File Exposure</h3>
+        <p>AI agents routinely read <code>.env</code> files when asked to debug configuration issues, run tests, or understand project setup. This is standard behavior — and a massive security gap.</p>
+        <span class="severity-badge severity-badge--medium">Pervasive Risk</span>
+      </div>
+
+      <div class="problem-card problem-card--warning">
+        <div class="problem-card-icon" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
+        <h3>Shell History Leakage</h3>
+        <p>Commands like <code>curl -H "Authorization: Bearer sk-..."</code> sit in shell history files. When an AI agent reads history for context, those tokens become part of its working memory.</p>
+        <span class="severity-badge severity-badge--medium">Common Pattern</span>
+      </div>
+    </div>
+
+    <div class="problem-solution-bridge">
+      <div class="bridge-arrow" aria-hidden="true">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M8 12h8M12 8l4 4-4 4"/>
+        </svg>
+      </div>
+      <p>Straylight-AI solves this at the transport layer. Credentials never enter the agent's context window &mdash; not even for a millisecond.</p>
+    </div>
+  </div>
+</section>
+
+<!-- =================== HOW IT WORKS =================== -->
+<section class="section" id="how-it-works" aria-labelledby="how-heading">
+  <div class="container">
+    <div class="section-label">How It Works</div>
+    <h2 id="how-heading" class="section-title">Credential injection at the transport layer</h2>
+    <p class="section-subtitle">
+      Straylight-AI sits between your AI agent and the external world. The agent asks for
+      API calls using service names &mdash; never credential strings. Straylight fetches
+      the credential from the encrypted vault and injects it directly into the HTTP request.
+    </p>
+
+    <!-- Flow diagram -->
+    <div class="flow-diagram" role="img" aria-label="Three-step data flow: agent requests API call, Straylight injects credential, agent receives response without key">
+      <div class="flow-step flow-step--agent">
+        <div class="flow-step-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+          </svg>
+        </div>
+        <div class="flow-step-number" aria-hidden="true">1</div>
+        <h3 class="flow-step-title">Agent Requests</h3>
+        <p class="flow-step-desc">Claude Code calls the MCP <code>api_call</code> tool with service name and parameters. No credential string is passed.</p>
+        <div class="flow-step-example">
+          <code>api_call("github", "GET /user")</code>
+        </div>
+      </div>
+
+      <div class="flow-connector" aria-hidden="true">
+        <div class="flow-connector-line"></div>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </div>
+
+      <div class="flow-step flow-step--straylight">
+        <div class="flow-step-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+            <rect width="28" height="28" rx="6" fill="#4f46e5"/>
+            <path d="M6 22 L14 6 L22 22" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <circle cx="14" cy="6" r="2" fill="#a5b4fc"/>
+          </svg>
+        </div>
+        <div class="flow-step-number" aria-hidden="true">2</div>
+        <h3 class="flow-step-title">Straylight Injects</h3>
+        <p class="flow-step-desc">Straylight retrieves the GitHub PAT from OpenBao vault and injects it as an HTTP Authorization header. The credential stays internal.</p>
+        <div class="flow-step-example flow-step-example--secure">
+          <code>Authorization: Bearer ghp_••••••••</code>
+        </div>
+      </div>
+
+      <div class="flow-connector" aria-hidden="true">
+        <div class="flow-connector-line"></div>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </div>
+
+      <div class="flow-step flow-step--response">
+        <div class="flow-step-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+        </div>
+        <div class="flow-step-number" aria-hidden="true">3</div>
+        <h3 class="flow-step-title">Agent Receives Data</h3>
+        <p class="flow-step-desc">The agent receives the API response data. The credential is sanitized from output before it reaches the context window. Zero exposure.</p>
+        <div class="flow-step-example flow-step-example--safe">
+          <code>{"login": "alice", "id": 12345...}</code>
+        </div>
+      </div>
+    </div>
+
+    <div class="flow-security-note">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      </svg>
+      <span>Output sanitization runs two-layer detection (regex + value matching) to catch any credential that might leak through API responses.</span>
+    </div>
+  </div>
+</section>
+
+<!-- =================== FEATURES =================== -->
+<section class="section section--alt" id="features" aria-labelledby="features-heading">
+  <div class="container">
+    <div class="section-label">Features</div>
+    <h2 id="features-heading" class="section-title">Everything you need to secure AI agent credentials</h2>
+    <p class="section-subtitle">
+      Built specifically for developers using AI coding assistants, not adapted from
+      enterprise secrets managers. Every feature addresses a real credential leak vector.
+    </p>
+
+    <div class="features-grid">
+      {% include feature-card.html
+        icon="shield"
+        title="Zero-Knowledge Proxy"
+        description="Credentials are injected at the HTTP transport layer. The AI agent's context window never contains a credential string, even temporarily. True zero-knowledge architecture." %}
+
+      {% include feature-card.html
+        icon="key"
+        title="Encrypted Vault Storage"
+        description="OpenBao (an open-source Vault fork) provides enterprise-grade encrypted storage. Auto-init, auto-unseal, and AppRole authentication — fully automated, no manual vault ops." %}
+
+      {% include feature-card.html
+        icon="plug"
+        title="MCP Integration"
+        description="Four MCP tools (api_call, exec, check, services) expose capabilities to Claude Code, Cursor, and any MCP-compatible client. Registered automatically on install." %}
+
+      {% include feature-card.html
+        icon="filter"
+        title="Output Sanitization"
+        description="Two-layer detection combining regex pattern matching and live value matching strips any credential that appears in API responses before the output reaches the agent." %}
+
+      {% include feature-card.html
+        icon="grid"
+        title="16 Service Templates"
+        description="Pre-configured templates for GitHub, Stripe, OpenAI, Anthropic, AWS, GCP, Azure, PostgreSQL, MySQL, MongoDB, Redis, Slack, Linear, Jira, SSH, and generic REST APIs." %}
+
+      {% include feature-card.html
+        icon="hook"
+        title="Claude Code Hooks"
+        description="PreToolUse hooks block credential-leaking commands (cat .env, echo $TOKEN, env). PostToolUse hooks sanitize output. Double defense against accidental exposure." %}
+    </div>
+
+    <div class="features-cta">
+      <a href="{{ site.baseurl }}/features/" class="btn btn-outline btn-md">Explore all features</a>
+    </div>
+  </div>
+</section>
+
+<!-- =================== SUPPORTED SERVICES =================== -->
+<section class="section" id="services" aria-labelledby="services-heading">
+  <div class="container">
+    <div class="section-label">Supported Services</div>
+    <h2 id="services-heading" class="section-title">Works with 16 services out of the box</h2>
+    <p class="section-subtitle">
+      Pre-built templates handle authentication for every major cloud provider, API platform,
+      and database. Add custom services with any auth method in under a minute.
+    </p>
+
+    <div class="services-grid" role="list" aria-label="Supported services">
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+        GitHub
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#6772e5" aria-hidden="true"><path d="M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.591-7.305z"/></svg>
+        Stripe
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#00A67E" aria-hidden="true"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>
+        OpenAI
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#D97757" aria-hidden="true"><path d="M17.304 8.126c-.27.107-.576.16-.895.16a2.41 2.41 0 0 1-2.4-2.41c0-1.329 1.077-2.41 2.4-2.41s2.4 1.081 2.4 2.41c0 .864-.46 1.623-1.153 2.062L22 12.5l-4.7 3.374c.69.438 1.15 1.196 1.15 2.058 0 1.33-1.078 2.41-2.4 2.41s-2.4-1.08-2.4-2.41c0-1.329 1.077-2.41 2.4-2.41.319 0 .624.053.895.16L14.21 13.34l-3.12 2.24A2.43 2.43 0 0 1 11.4 17c0 1.33-1.077 2.41-2.4 2.41S6.6 18.33 6.6 17s1.077-2.41 2.4-2.41c.32 0 .625.053.896.16l3.084-2.213-3.085-2.213a2.43 2.43 0 0 1-.895.16C7.678 10.484 6.6 9.404 6.6 8.075c0-1.329 1.077-2.41 2.4-2.41s2.4 1.081 2.4 2.41c0 .316-.056.618-.153.9l3.12 2.245 2.936-2.094Z"/></svg>
+        Anthropic
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#FF9900" aria-hidden="true"><path d="M13.958 10.09c0 1.232.029 2.256-.591 3.351-.502.891-1.301 1.438-2.186 1.438-1.214 0-1.922-.924-1.922-2.292 0-2.692 2.415-3.182 4.7-3.182v.685zm3.186 7.705c-.209.189-.512.201-.748.074-1.052-.872-1.238-1.276-1.814-2.106-1.734 1.767-2.962 2.297-5.209 2.297-2.66 0-4.731-1.641-4.731-4.925 0-2.565 1.391-4.309 3.37-5.164 1.715-.754 4.11-.891 5.942-1.099v-.41c0-.753.06-1.642-.383-2.294-.385-.579-1.124-.82-1.775-.82-1.205 0-2.277.618-2.54 1.897-.054.285-.261.567-.549.582l-3.061-.333c-.259-.056-.548-.266-.472-.66C5.97 2.4 8.715 1.5 11.186 1.5c1.26 0 2.909.336 3.906 1.29C16.398 3.98 16.3 5.77 16.3 7.718v4.663c0 1.402.582 2.018 1.128 2.775.192.274.236.599-.01.797l-2.274 1.842zm3.51 1.688c-2.989 2.218-7.32 3.395-11.043 3.395C4.568 22.877.5 20.857.5 17.563c0-1.115.491-2.148 1.33-2.923-.115-.31-.1-.633.01-.826.41-.704 1.13-.99 2.013-.626.378.15.823.357 1.398.594 1.61.663 3.823 1.19 5.95 1.19 2.547 0 5.13-.529 7.176-1.758.379-.231.812.072.663.484-.157.427-.413.868-.761 1.31-.16.203-.088.484.131.592 2.246 1.135 3.762 3.025 4.284 3.693.258.325-.072.763-.448.673z"/></svg>
+        AWS
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#4285F4" aria-hidden="true"><path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
+        GCP
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#0089D6" aria-hidden="true"><path d="M22.379 9.46c.06.263.09.535.09.809 0 2.287-1.857 4.144-4.144 4.144-.072 0-.144-.002-.215-.006l-.015.006H8.048l-.024-.007a4.47 4.47 0 0 1-4.344-4.468A4.47 4.47 0 0 1 8.18 5.47c.075 0 .15.002.224.006a5.46 5.46 0 0 1 5.04-3.354 5.457 5.457 0 0 1 5.31 4.165 3.702 3.702 0 0 1 3.625 3.173zm-9.674 9.312l-3.148-3.147-.709.709 3.857 3.857 8.269-8.269-.709-.709z"/></svg>
+        Azure
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#336791" aria-hidden="true"><path d="M17.128 0a10.134 10.134 0 0 0-2.755.403C13.605.097 12.754 0 11.849 0 9.31 0 7.227.837 5.89 2.293c-.862.96-1.402 2.19-1.605 3.660-.222 1.6.02 2.955.698 4.008.86 1.33 2.107 2.054 3.609 2.097.42.012.844-.068 1.224-.24.177.483.4.93.667 1.323.56.826 1.37 1.53 2.22 1.934.44.207.893.31 1.345.31.45 0 .903-.103 1.344-.31.85-.404 1.66-1.108 2.22-1.934.267-.393.49-.84.667-1.323.38.172.804.252 1.224.24 1.502-.043 2.75-.767 3.609-2.097.678-1.053.92-2.408.698-4.008-.203-1.47-.743-2.7-1.605-3.66C20.45.879 18.947.12 17.128 0zm-5.28 1.4c.487 0 .985.053 1.48.159a4.643 4.643 0 0 0-1.87 1.5 5.337 5.337 0 0 0-.913 2.55c-.11.964-.038 1.915.213 2.782-.47.193-.924.295-1.373.305-1.144-.032-2.046-.586-2.688-1.605-.537-.83-.732-1.93-.564-3.146.183-1.327.66-2.336 1.42-3.16.803-.872 1.95-1.385 3.295-1.385zm5.28 0h.003c1.346 0 2.493.513 3.295 1.385.76.824 1.237 1.833 1.42 3.16.168 1.217-.027 2.316-.564 3.146-.642 1.02-1.544 1.573-2.688 1.605-.449-.01-.903-.112-1.373-.305.251-.867.323-1.818.213-2.782a5.337 5.337 0 0 0-.913-2.55 4.643 4.643 0 0 0-1.87-1.5c.495-.106.993-.159 1.48-.159z"/></svg>
+        PostgreSQL
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#4479A1" aria-hidden="true"><path d="M16.405 5.501c-.115 0-.193.014-.274.033v.013h.014c.054.104.146.18.214.273.054.107.1.214.154.32l.014-.015c.094-.066.14-.172.14-.333-.04-.047-.046-.094-.068-.133-.040-.040-.107-.060-.194-.158z"/><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm1.885 4.451c1.024.042 1.742.276 2.147.697.319.335.474.793.442 1.365-.04.728-.434 1.303-1.1 1.64-.474.236-1.108.386-1.86.386h-.427v2.42h-1.34V4.484h2.138zm-5.11.033c.744 0 1.48.234 2.134.697a3.6 3.6 0 0 1 .64.655v-.001l-.003.003-.017.02c-.042.055-.083.11-.12.168a3.19 3.19 0 0 0-.43 1.14 3.23 3.23 0 0 0 .043 1.183 3.72 3.72 0 0 0 .36.98l-.022.012a2.837 2.837 0 0 1-.638.17 5.26 5.26 0 0 1-.71.054c-1.65 0-2.725-.962-2.725-2.558 0-1.577 1.075-2.523 2.725-2.523h.007l.002.001h-.246zm7.338 4.937a2.31 2.31 0 0 1 .614.08c.198.052.38.13.537.238.157.108.285.24.386.398.101.157.155.338.155.543a1.07 1.07 0 0 1-.155.578 1.27 1.27 0 0 1-.386.4 1.84 1.84 0 0 1-.537.244 2.31 2.31 0 0 1-.614.08h-.786v1.965H14.63V9.484l1.483-.063zm-7.113.063h1.337v4.397H9v-4.397z"/></svg>
+        MySQL
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#47A248" aria-hidden="true"><path d="M17.193 9.555c-1.264-5.58-4.252-7.414-4.573-8.115-.28-.394-.53-.954-.735-1.44-.036.495-.055.Areas.05.665-.645 3.58.107 5.517.107 5.517-.421 1.296-1.03 2.484-1.794 3.556.16-1.216.166-2.495-.235-3.556-.49-1.316-1.394-2.57-2.456-3.16-.167-.09-.36-.14-.504-.14-.244 0-.482.105-.653.294-.162.18-.255.42-.255.666 0 .192.048.38.135.55-.19.144-.36.31-.497.502-.413.578-.663 1.284-.688 1.997-.03.803.133 1.574.49 2.2.377.657.94 1.12 1.582 1.32.264.08.545.125.823.125.436 0 .873-.112 1.27-.332.095.53.18 1.065.257 1.59.156 1.055.298 2.116.417 3.18.115 1.04.207 2.088.28 3.137.074 1.053.13 2.11.152 3.157l.008.44c.002.1.004.2.004.3 0 .16-.004.318-.01.476-.02.668-.09 1.34-.21 1.996-.14.755-.37 1.48-.686 2.145l-.01.023c.297-.044.6-.086.904-.135.3-.047.597-.098.892-.155.595-.116 1.186-.247 1.768-.403.576-.155 1.147-.33 1.705-.533.56-.203 1.108-.437 1.637-.7.534-.265 1.052-.56 1.553-.886a11.95 11.95 0 0 0 1.448-1.107 9.87 9.87 0 0 0 1.208-1.324 7.78 7.78 0 0 0 .88-1.5 6.3 6.3 0 0 0 .465-1.629 6.15 6.15 0 0 0-.112-2.022z"/></svg>
+        MongoDB
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#DC382D" aria-hidden="true"><path d="M10.51 11.861c-.693.355-4.515 1.937-5.328 2.354-.812.417-.64.814-.036.955l7.146 2.918c.44.174 1.118.174 1.473-.004L21.19 14.1c.355-.194.404-.583-.068-.806L15.97 11.21c-.694-.313-.96-.16-1.566-.074l-2.44.403a.25.25 0 0 1-.045.004c-.15 0-.28-.05-.375-.147L10.51 11.86zm5.508-4.463a.26.26 0 0 0-.05.005l-2.44.403a.26.26 0 0 1-.055.005c-.138 0-.264-.058-.36-.152l-1.04-.79c-.693.355-4.515 1.938-5.328 2.354-.812.416-.64.814-.036.955l7.146 2.92c.44.173 1.118.173 1.473-.005l7.425-3.984c.355-.195.404-.584-.068-.806l-5.152-2.083a1.43 1.43 0 0 0-.515-.82z"/></svg>
+        Redis
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#4A154B" aria-hidden="true"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zm10.122 2.521a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zm-2.523 10.122a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>
+        Slack
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#5E6AD2" aria-hidden="true"><path d="M15.585 15.585c-.854.853-2.168.96-3.15.32L4.39 23.95 2.05 21.61l8.045-8.045c-.64-.98-.533-2.295.32-3.148.852-.853 2.166-.96 3.148-.32l-2.16 2.16 1.414 1.414 2.16-2.16c.64.982.533 2.296-.32 3.148l-.072.072zm5.785-5.785l-1.627-1.628-2.16 2.16-1.414-1.414 2.16-2.16-1.628-1.627-2.16 2.16-1.414-1.414 2.16-2.16L13.659 2.05a2.906 2.906 0 0 0-4.107 0L6.5 5.1 2 9.6l2.342 2.342L3 13.285l1.414 1.414 1.342-1.342 2.343 2.342L10.4 12.5l1.342 1.342 2.341-2.341 1.628 1.627 2.16-2.16 1.414 1.414-2.16 2.16 1.628 1.628 2.16-2.16.048.048a2.906 2.906 0 0 0 0-4.108z"/></svg>
+        Linear
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#0052CC" aria-hidden="true"><path d="M11.571 11.429L7.429 7.286a.571.571 0 0 0-.857 0L.286 13.571a.571.571 0 0 0 0 .857l4.143 4.143a.571.571 0 0 0 .857 0l4.143-4.143-2.572-2.572a.571.571 0 0 1 0-.857l4.714-4.714.857.857zm.858-.858l4.143 4.143a.571.571 0 0 0 .857 0l6.285-6.285a.571.571 0 0 0 0-.857L19.571.429a.571.571 0 0 0-.857 0L14.57 4.571l2.572 2.572a.571.571 0 0 1 0 .857l-4.714 4.714-.857-.857z"/></svg>
+        Jira
+      </div>
+      <div class="service-chip" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#6e5494" aria-hidden="true"><path d="M22 16.56c0 2.45-2.54 4.44-5.67 4.44-2.21 0-4.12-1.01-5.13-2.49l.01-.01c.58.1 1.2.16 1.83.16 3.5 0 6.32-2.05 6.32-4.58 0-.5-.12-.97-.32-1.4.96.87 1.56 2.07 1.56 3.42-.62.06.06.4-.6.46zM17.78 12c0 2.45-2.54 4.44-5.67 4.44S6.44 14.45 6.44 12 8.98 7.56 12.11 7.56s5.67 2 5.67 4.44zm-11.33 3.4c-.2.43-.32.9-.32 1.4 0 2.53 2.82 4.58 6.32 4.58.63 0 1.25-.06 1.83-.16l.01.01C13.3 22.71 11.39 23.72 9.18 23.72c-3.13 0-5.67-1.99-5.67-4.44 0-1.35.6-2.55 1.56-3.42l-.62.54zM2.54 7.44C2.54 4.99 5.08 3 8.21 3c2.21 0 4.12 1.01 5.13 2.49l-.01.01C12.75 5.4 12.13 5.34 11.5 5.34c-3.5 0-6.32 2.05-6.32 4.58 0 .5.12.97.32 1.4C4.54 10.45 3.94 9.25 3.94 7.9c.62-.06-.06-.4.6-.46z"/></svg>
+        SSH
+      </div>
+      <div class="service-chip service-chip--plus" role="listitem">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="16"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+        </svg>
+        Custom REST APIs
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== ONE-COMMAND INSTALL =================== -->
+<section class="section section--alt" id="install" aria-labelledby="install-heading">
+  <div class="container">
+    <div class="section-label">Installation</div>
+    <h2 id="install-heading" class="section-title">One command. Zero configuration.</h2>
+    <p class="section-subtitle">
+      <code>npx straylight-ai</code> pulls the Docker image, initializes the vault,
+      starts the MCP server, and registers it with Claude Code. Everything automated.
+    </p>
+
+    <div class="install-demo">
+      <div class="terminal" role="region" aria-label="Installation terminal demo">
+        <div class="terminal-header">
+          <span class="terminal-dot terminal-dot--red"></span>
+          <span class="terminal-dot terminal-dot--yellow"></span>
+          <span class="terminal-dot terminal-dot--green"></span>
+          <span class="terminal-title">Terminal</span>
+        </div>
+        <div class="terminal-body">
+          <div class="terminal-line">
+            <span class="terminal-prompt">$</span>
+            <span class="terminal-cmd">npx straylight-ai</span>
+            <button class="copy-btn" data-copy="npx straylight-ai" aria-label="Copy install command">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="terminal-line terminal-output">Checking Docker...</div>
+          <div class="terminal-line terminal-output">Pulling straylight-ai/straylight:0.1.0</div>
+          <div class="terminal-line terminal-output terminal-output--indent">0.1.0: Pulling from straylight-ai/straylight</div>
+          <div class="terminal-line terminal-output terminal-output--indent">Digest: sha256:a3f2e1...</div>
+          <div class="terminal-line terminal-output terminal-output--indent">Status: Downloaded newer image</div>
+          <div class="terminal-line terminal-output">Starting container straylight-ai...</div>
+          <div class="terminal-line terminal-output">Waiting for OpenBao vault to initialize...</div>
+          <div class="terminal-line terminal-success">Vault initialized (auto-unseal enabled)</div>
+          <div class="terminal-line terminal-output">Configuring AppRole authentication...</div>
+          <div class="terminal-line terminal-success">AppRole configured</div>
+          <div class="terminal-line terminal-output">Starting MCP server...</div>
+          <div class="terminal-line terminal-success">MCP server listening</div>
+          <div class="terminal-line terminal-output">Registering with Claude Code...</div>
+          <div class="terminal-line terminal-success">Claude Code MCP registered: straylight-ai</div>
+          <div class="terminal-line">&nbsp;</div>
+          <div class="terminal-line terminal-success terminal-line--bold">Straylight-AI is running!</div>
+          <div class="terminal-line terminal-output">Dashboard: http://localhost:4242</div>
+          <div class="terminal-line terminal-output">MCP endpoint: stdio via npx straylight-ai mcp</div>
+        </div>
+      </div>
+
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="install-step-num">1</div>
+          <div class="install-step-content">
+            <h3>Install and start</h3>
+            <p>Run <code>npx straylight-ai</code>. Requires Docker to be running. That is the only prerequisite.</p>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="install-step-num">2</div>
+          <div class="install-step-content">
+            <h3>Add your services</h3>
+            <p>Open <code>http://localhost:4242</code> and use the wizard to add a GitHub PAT, Stripe key, or any other service credential.</p>
+          </div>
+        </div>
+        <div class="install-step">
+          <div class="install-step-num">3</div>
+          <div class="install-step-content">
+            <h3>Ask your AI agent</h3>
+            <p>Tell Claude Code to check your GitHub notifications or create a Stripe payment link. It works — without ever seeing your key.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== SECURITY =================== -->
+<section class="section" id="security" aria-labelledby="security-heading">
+  <div class="container">
+    <div class="section-label">Security</div>
+    <h2 id="security-heading" class="section-title">Defense in depth for AI agent credentials</h2>
+    <p class="section-subtitle">
+      Every layer of Straylight-AI is designed with the assumption that the AI agent
+      is potentially compromised. Multiple independent controls prevent credential exfiltration.
+    </p>
+
+    <div class="security-layers">
+      <div class="security-layer">
+        <div class="security-layer-badge">Layer 1</div>
+        <div class="security-layer-content">
+          <h3>Vault Encryption at Rest</h3>
+          <p>All credentials stored in OpenBao are encrypted with AES-256-GCM before being written to disk. The encryption key is never stored alongside the data. Auto-unseal uses a separate derived key.</p>
+        </div>
+      </div>
+      <div class="security-layer">
+        <div class="security-layer-badge">Layer 2</div>
+        <div class="security-layer-content">
+          <h3>AppRole Authentication</h3>
+          <p>Straylight's MCP server uses AppRole auth to retrieve secrets from the vault. The RoleID and SecretID are separated — neither alone can authenticate. Tokens are short-lived and auto-renewed.</p>
+        </div>
+      </div>
+      <div class="security-layer">
+        <div class="security-layer-badge">Layer 3</div>
+        <div class="security-layer-content">
+          <h3>Transport-Layer Injection</h3>
+          <p>Credentials are added to HTTP requests at the network transport layer, after the MCP tool call completes its parameter parsing. The credential value is never in a Go string that the MCP layer handles.</p>
+        </div>
+      </div>
+      <div class="security-layer">
+        <div class="security-layer-badge">Layer 4</div>
+        <div class="security-layer-content">
+          <h3>Output Sanitization</h3>
+          <p>Two-phase scanning: first regex patterns detect common credential formats (Bearer tokens, API key prefixes, connection strings). Then live value matching checks for the actual stored credential values.</p>
+        </div>
+      </div>
+      <div class="security-layer">
+        <div class="security-layer-badge">Layer 5</div>
+        <div class="security-layer-content">
+          <h3>Claude Code Hooks</h3>
+          <p>PreToolUse hooks intercept and block tool calls that would expose credentials: reading .env files, printing environment variables, accessing shell history. PostToolUse hooks sanitize any output that slips through.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- =================== COMPARISON =================== -->
+<section class="section section--alt" id="comparison" aria-labelledby="comparison-heading">
+  <div class="container">
+    <div class="section-label">Comparison</div>
+    <h2 id="comparison-heading" class="section-title">How Straylight-AI compares</h2>
+    <p class="section-subtitle">
+      Existing solutions were built for human operators, not AI agents. Straylight-AI
+      is purpose-built for the agent threat model.
+    </p>
+
+    <div class="table-wrapper">
+      <table class="comparison-table" aria-label="Feature comparison between Straylight-AI and alternatives">
+        <caption class="sr-only">Comparison of Straylight-AI, AgentSecrets, Akeyless, 1Password Agentic, and .env files across key security and usability features</caption>
+        <thead>
+          <tr>
+            <th scope="col">Feature</th>
+            <th scope="col" class="col-straylight">
+              <span class="col-highlight">Straylight-AI</span>
+              <span class="col-badge">Our pick</span>
+            </th>
+            <th scope="col">AgentSecrets</th>
+            <th scope="col">Akeyless</th>
+            <th scope="col">1Password Agentic</th>
+            <th scope="col">.env Files</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Zero-knowledge proxy</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td>Self-hosted</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+          </tr>
+          <tr>
+            <td>MCP integration</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="partial" aria-label="Partial">&#10227;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td>Vault backend</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td>Output sanitization</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td>Claude Code hooks</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td>One-command install</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+          </tr>
+          <tr>
+            <td>Open source</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span> MIT</td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="cross" aria-label="No">&#10007;</span></td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+          </tr>
+          <tr>
+            <td>Free to use</td>
+            <td class="col-straylight"><span class="check" aria-label="Yes">&#10003;</span> Always</td>
+            <td><span class="partial" aria-label="Partial">&#10227;</span> Freemium</td>
+            <td><span class="partial" aria-label="Partial">&#10227;</span> Freemium</td>
+            <td><span class="cross" aria-label="No">&#10007;</span> Paid</td>
+            <td><span class="check" aria-label="Yes">&#10003;</span></td>
+          </tr>
+          <tr>
+            <td>Service templates</td>
+            <td class="col-straylight">16 built-in</td>
+            <td>8 built-in</td>
+            <td>Custom only</td>
+            <td>Custom only</td>
+            <td>None</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="comparison-note">
+      &#10227; = Partial support. Comparison based on publicly available documentation as of Q1 2026.
+    </p>
+  </div>
+</section>
+
+<!-- =================== CTA =================== -->
+{% include cta.html %}
+
+<!-- JSON-LD: FAQ -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Does the AI agent ever see my API keys with Straylight-AI?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Straylight-AI uses a zero-knowledge architecture where credentials are injected at the HTTP transport layer. The AI agent's context window never contains a credential string. Output sanitization also strips any credential that might appear in API responses."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How do I install Straylight-AI?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Run 'npx straylight-ai' in your terminal. The only prerequisite is Docker. The command automatically pulls the image, initializes the vault, and registers the MCP server with Claude Code."
+      }
+    }
+  ]
+}
+</script>

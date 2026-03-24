@@ -1,0 +1,12 @@
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>{% if page.title %}{{ page.title }} | Straylight-AI{% else %}Straylight-AI — Zero-Knowledge Credential Proxy for AI Agents{% endif %}</title>
+<meta name="description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+<link rel="canonical" href="{{ page.url | prepend: site.baseurl | prepend: site.url }}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{% if page.title %}{{ page.title }} | Straylight-AI{% else %}Straylight-AI{% endif %}">
+<meta property="og:description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+<meta property="og:image" content="{{ site.url }}{{ site.baseurl }}/assets/images/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@straylightai">

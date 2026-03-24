@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://straylight-ai.github.io/straylight/sitemap.xml

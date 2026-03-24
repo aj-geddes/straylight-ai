@@ -1,0 +1,416 @@
+# API Changes for Multi-Auth-Method Support
+#
+# This file documents the delta from the existing internal-api.yaml.
+# It is NOT a standalone OpenAPI spec -- it shows only what changes.
+
+# ============================================================================
+# CHANGED SCHEMAS
+# ============================================================================
+
+components:
+  schemas:
+
+    # --- NEW: AuthMethod schema ---
+    AuthMethod:
+      type: object
+      description: One authentication method supported by a service template.
+      properties:
+        id:
+          type: string
+          description: Unique identifier within the template (e.g., "github_pat_classic")
+          examples: ["github_pat_classic", "stripe_api_key", "basic_auth"]
+        name:
+          type: string
+          description: Human-readable name shown in the UI
+          examples: ["Personal Access Token (classic)", "API Key", "Basic Auth"]
+        description:
+          type: string
+          description: Brief explanation of this auth method
+        fields:
+          type: array
+          description: Credential fields the user must provide. Empty for OAuth methods.
+          items:
+            $ref: "#/components/schemas/CredentialField"
+        injection:
+          $ref: "#/components/schemas/InjectionConfig"
+        auto_refresh:
+          type: boolean
+          default: false
+          description: Whether this auth method supports automatic token refresh
+        token_prefix:
+          type: string
+          description: Expected prefix for client-side validation (e.g., "ghp_")
+          nullable: true
+      required: [id, name, fields, injection]
+
+    CredentialField:
+      type: object
+      description: A single input field for credential entry.
+      properties:
+        key:
+          type: string
+          description: Field identifier, used as the vault secret key
+          examples: ["token", "username", "password", "access_key_id"]
+        label:
+          type: string
+          description: Human-readable label for the UI
+          examples: ["API Key", "Username", "Secret Access Key"]
+        type:
+          type: string
+          enum: [password, text, textarea]
+          default: password
+          description: Input field type for the UI
+        placeholder:
+          type: string
+          description: Placeholder text for the input field
+          nullable: true
+        required:
+          type: boolean
+          default: true
+        pattern:
+          type: string
+          description: Regex pattern for client-side format validation
+          nullable: true
+        help_text:
+          type: string
+          description: Additional help text shown below the field
+          nullable: true
+      required: [key, label]
+
+    InjectionConfig:
+      type: object
+      description: How credentials are injected into outbound HTTP requests.
+      properties:
+        type:
+          type: string
+          enum:
+            - bearer_header
+            - custom_header
+            - multi_header
+            - query_param
+            - basic_auth
+            - oauth
+            - named_strategy
+          description: |
+            Injection strategy type:
+            - bearer_header: Authorization: Bearer {token}
+            - custom_header: {header_name}: {rendered template}
+            - multi_header: Multiple headers from multiple credential fields
+            - query_param: ?{param}={token}
+            - basic_auth: Authorization: Basic base64(user:pass)
+            - oauth: Handled by OAuth flow (no paste fields)
+            - named_strategy: Code-backed strategy (e.g., aws_sigv4)
+        header_name:
+          type: string
+          description: Header name for custom_header injection
+          nullable: true
+        header_template:
+          type: string
+          description: "Go template for header value (e.g., 'Bearer {{.Secret}}')"
+          nullable: true
+        query_param:
+          type: string
+          description: Query parameter name for query_param injection
+          nullable: true
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: "Header-name -> template mapping for multi_header injection"
+          nullable: true
+        strategy:
+          type: string
+          description: Named strategy identifier for named_strategy injection
+          nullable: true
+          examples: ["aws_sigv4", "github_app_jwt"]
+      required: [type]
+
+    # --- UPDATED: ServiceTemplate (replaces existing) ---
+    ServiceTemplate:
+      type: object
+      description: Pre-configured template for a common service with multiple auth methods.
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+          description: Icon identifier for the Web UI tile
+        target:
+          type: string
+          format: uri
+        default_headers:
+          type: object
+          additionalProperties:
+            type: string
+        auth_methods:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuthMethod"
+          minItems: 1
+          description: Supported authentication methods (user picks one)
+        exec_config:
+          type: object
+          properties:
+            env_var:
+              type: string
+          nullable: true
+      required: [id, display_name, target, auth_methods]
+
+    # --- UPDATED: CreateServiceRequest ---
+    # Changes: credential field becomes a map; auth_method field added
+    CreateServiceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,62}$"
+          description: Unique service name.
+        type:
+          type: string
+          enum: [http_proxy, oauth]
+        target:
+          type: string
+          format: uri
+        auth_method:
+          type: string
+          description: |
+            ID of the chosen auth method from the template.
+            If omitted, defaults to legacy single-key behavior.
+          nullable: true
+          examples: ["github_pat_classic", "stripe_api_key", "basic_auth"]
+        inject:
+          type: string
+          enum: [header, query]
+          default: header
+          description: "DEPRECATED: Use auth_method instead. Kept for backward compat."
+        header_template:
+          type: string
+          description: "DEPRECATED: Use auth_method instead."
+        header_name:
+          type: string
+          description: "DEPRECATED: Use auth_method instead."
+        query_param:
+          type: string
+          description: "DEPRECATED: Use auth_method instead."
+        default_headers:
+          type: object
+          additionalProperties:
+            type: string
+        credentials:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Credential field values keyed by CredentialField.key.
+            Examples:
+              Single-field:  {"token": "ghp_xxxx"}
+              Multi-field:   {"username": "admin", "password": "s3cret"}
+              AWS:           {"access_key_id": "AKIA...", "secret_access_key": "wJal..."}
+            This field is write-only; never returned by GET endpoints.
+        credential:
+          type: string
+          description: |
+            DEPRECATED: Legacy single-credential field. Use 'credentials' (map) instead.
+            If both 'credential' and 'credentials' are provided, 'credentials' takes precedence.
+        exec_config:
+          type: object
+          properties:
+            env_var:
+              type: string
+      required: [name, type, target]
+
+    # --- UPDATED: UpdateServiceRequest ---
+    UpdateServiceRequest:
+      type: object
+      properties:
+        target:
+          type: string
+          format: uri
+        auth_method:
+          type: string
+          description: Change the auth method (also requires new credentials)
+        credentials:
+          type: object
+          additionalProperties:
+            type: string
+          description: If provided, replaces the existing credentials.
+        credential:
+          type: string
+          description: "DEPRECATED: Use 'credentials' instead."
+
+    # --- UPDATED: ServiceSummary ---
+    # New field: auth_method
+    ServiceSummary:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [http_proxy, oauth]
+        status:
+          type: string
+          enum: [available, expired, not_configured, error]
+        target:
+          type: string
+          format: uri
+        auth_method:
+          type: string
+          description: ID of the chosen auth method, or null for legacy services
+          nullable: true
+        auth_method_name:
+          type: string
+          description: Human-readable name of the auth method (resolved from template)
+          nullable: true
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [api_call, exec]
+        created_at:
+          type: string
+          format: date-time
+      required: [name, type, status, capabilities]
+
+    # --- UPDATED: ServiceDetail ---
+    ServiceDetail:
+      allOf:
+        - $ref: "#/components/schemas/ServiceSummary"
+        - type: object
+          properties:
+            inject:
+              type: string
+              description: "DEPRECATED: Resolved from auth_method's injection config"
+            header_template:
+              type: string
+              description: "DEPRECATED"
+
+# ============================================================================
+# CHANGED ENDPOINTS
+# ============================================================================
+
+paths:
+
+  # GET /api/v1/templates -- response shape changes
+  # Was: { templates: Service[] }
+  # Now: { templates: ServiceTemplate[] }
+  # The ServiceTemplate type now includes auth_methods[] instead of flat fields.
+  /api/v1/templates:
+    get:
+      operationId: listServiceTemplates
+      summary: List available service templates with auth methods
+      description: |
+        Returns pre-configured templates for common services. Each template
+        includes its supported authentication methods with credential field
+        definitions for dynamic UI rendering.
+      tags: [Templates]
+      responses:
+        "200":
+          description: Template list with auth methods
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceTemplate"
+              example:
+                templates:
+                  - id: github
+                    display_name: GitHub
+                    target: https://api.github.com
+                    auth_methods:
+                      - id: github_pat_classic
+                        name: "Personal Access Token (classic)"
+                        fields:
+                          - key: token
+                            label: "Personal Access Token"
+                            type: password
+                            placeholder: "ghp_xxxxxxxxxxxx"
+                            required: true
+                            pattern: "^ghp_"
+                        injection:
+                          type: bearer_header
+                      - id: github_oauth
+                        name: OAuth
+                        fields: []
+                        injection:
+                          type: oauth
+
+  # POST /api/v1/services -- request body adds auth_method + credentials (map)
+  /api/v1/services:
+    post:
+      operationId: createService
+      summary: Add a new service with auth method and credentials
+      tags: [Services]
+      requestBody:
+        content:
+          application/json:
+            examples:
+              # New format with auth_method
+              github_pat:
+                summary: GitHub with Fine-grained PAT (new format)
+                value:
+                  name: github
+                  type: http_proxy
+                  target: "https://api.github.com"
+                  auth_method: github_fine_grained_pat
+                  credentials:
+                    token: "github_pat_xxx"
+              # Multi-field example
+              basic_auth:
+                summary: Service with Basic Auth
+                value:
+                  name: my-api
+                  type: http_proxy
+                  target: "https://api.example.com"
+                  auth_method: basic_auth
+                  credentials:
+                    username: admin
+                    password: s3cret
+              # Legacy format (still supported)
+              stripe_legacy:
+                summary: Stripe with API key (legacy format)
+                value:
+                  name: stripe
+                  type: http_proxy
+                  target: "https://api.stripe.com"
+                  inject: header
+                  header_template: "Bearer {{.secret}}"
+                  credential: "sk_live_xxx"
+
+  # POST /api/v1/services/{name}/rotate -- updated for multi-field
+  /api/v1/services/{name}/rotate:
+    post:
+      operationId: rotateCredential
+      summary: Rotate service credentials
+      tags: [Services]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                credentials:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: New credential values (all fields required)
+                credential:
+                  type: string
+                  description: "DEPRECATED: Use 'credentials' instead"
+            examples:
+              multi_field:
+                value:
+                  credentials:
+                    access_key_id: "AKIA_NEW_xxx"
+                    secret_access_key: "wJal_NEW_xxx"
+              single_field_legacy:
+                value:
+                  credential: "sk_live_NEW_xxx"

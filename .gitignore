@@ -1,0 +1,57 @@
+# ==================== Go ====================
+# Compiled binaries
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary artifacts
+*.test
+*.out
+
+# Go build cache
+/vendor/
+
+# Go coverage output
+coverage.out
+coverage.html
+
+# ==================== Node / Web UI ====================
+node_modules/
+web/dist/
+web/.vite/
+npm/*/node_modules/
+npm/*/dist/
+*.tsbuildinfo
+
+# ==================== Docker ====================
+.dockerignore
+
+# ==================== Editor / OS ====================
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# ==================== Straylight runtime data ====================
+# Local development data directory (contains OpenBao init.json with unseal key)
+data/
+*.log
+
+# ==================== Secrets (never commit) ====================
+.env
+.env.*
+*.pem
+*.key
+*_rsa
+*_ed25519
+openbao/init.json
+
+# Exclude test files with fake credential fixtures (triggers GitHub push protection)
+internal/sanitizer/sanitizer_test.go

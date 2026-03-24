@@ -1,0 +1,284 @@
+# Straylight-AI Configuration File Schema
+# Stored at: /data/config.yaml (inside container)
+# or ~/.straylight-ai/data/config.yaml (host path)
+#
+# IMPORTANT: This file contains service configuration but NEVER contains
+# credentials. All secrets are stored in OpenBao.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: Straylight-AI Configuration
+description: |
+  Configuration file for Straylight-AI Personal. This file defines which
+  services are configured and how to connect to them. Credential values
+  are stored separately in OpenBao, never in this file.
+
+type: object
+
+properties:
+  version:
+    type: string
+    const: "1"
+    description: Configuration schema version.
+
+  vault:
+    type: object
+    description: OpenBao connection settings. Typically auto-configured.
+    properties:
+      address:
+        type: string
+        format: uri
+        default: "http://127.0.0.1:9443"
+        description: OpenBao API address. Internal to container.
+    required: [address]
+
+  server:
+    type: object
+    description: Straylight-AI server settings.
+    properties:
+      listen_address:
+        type: string
+        default: "0.0.0.0:9470"
+        description: Address for the HTTP server to bind to inside the container.
+      log_level:
+        type: string
+        enum: [debug, info, warn, error]
+        default: info
+      log_format:
+        type: string
+        enum: [text, json]
+        default: text
+    required: [listen_address]
+
+  sanitizer:
+    type: object
+    description: Output sanitizer configuration.
+    properties:
+      enabled:
+        type: boolean
+        default: true
+      replacement_template:
+        type: string
+        default: "[REDACTED:{{.service}}]"
+        description: Template for credential replacement in sanitized output.
+      custom_patterns:
+        type: array
+        description: Additional regex patterns to detect and redact.
+        items:
+          type: object
+          properties:
+            name:
+              type: string
+              description: Human-readable name for the pattern.
+            pattern:
+              type: string
+              description: Regular expression pattern. Must not contain capturing groups that could leak values.
+            service:
+              type: string
+              description: Service name to use in replacement text.
+          required: [name, pattern]
+
+  services:
+    type: object
+    description: |
+      Service configuration map. Keys are service names (lowercase, alphanumeric,
+      hyphens, underscores). Values define how to connect to each service.
+    additionalProperties:
+      $ref: "#/$defs/ServiceConfig"
+
+$defs:
+  ServiceConfig:
+    type: object
+    description: Configuration for a single external service.
+    properties:
+      type:
+        type: string
+        enum: [http_proxy, oauth]
+        description: |
+          http_proxy: Direct API key/token injection into HTTP requests.
+          oauth: OAuth 2.0 authorization code flow with token management.
+
+      target:
+        type: string
+        format: uri
+        description: Base URL of the external service API.
+        examples:
+          - "https://api.stripe.com"
+          - "https://api.github.com"
+          - "https://api.openai.com"
+
+      inject:
+        type: string
+        enum: [header, query, body]
+        default: header
+        description: |
+          Where to inject the credential in outgoing requests.
+          header: Set an HTTP header (most common).
+          query: Append as query parameter.
+          body: Inject into request body.
+
+      header_template:
+        type: string
+        default: "Bearer {{.secret}}"
+        description: |
+          Go template for the Authorization header value.
+          Available variables: {{.secret}} (the credential value).
+        examples:
+          - "Bearer {{.secret}}"
+          - "Basic {{.secret}}"
+          - "token {{.secret}}"
+
+      header_name:
+        type: string
+        default: "Authorization"
+        description: HTTP header name for credential injection.
+
+      query_param:
+        type: string
+        description: Query parameter name (only used when inject=query).
+
+      default_headers:
+        type: object
+        additionalProperties:
+          type: string
+        description: Additional headers to include in every proxied request.
+        examples:
+          - Content-Type: "application/json"
+            Stripe-Version: "2024-12-18"
+
+      timeout_seconds:
+        type: integer
+        default: 30
+        minimum: 1
+        maximum: 300
+        description: Timeout for proxied HTTP requests.
+
+      exec_config:
+        type: object
+        description: Configuration for command execution (straylight_exec tool).
+        properties:
+          env_var:
+            type: string
+            description: |
+              Environment variable name to inject the credential into.
+              The command runs with this variable set.
+            examples: ["GH_TOKEN", "OPENAI_API_KEY", "STRIPE_API_KEY"]
+          allowed_commands:
+            type: array
+            items:
+              type: string
+            description: |
+              Optional allowlist of command prefixes. If set, only commands
+              starting with one of these prefixes will be executed.
+            examples:
+              - ["gh", "git"]
+              - ["aws", "terraform"]
+          env_extras:
+            type: object
+            additionalProperties:
+              type: string
+            description: Additional non-secret environment variables to set.
+
+      oauth_config:
+        type: object
+        description: OAuth 2.0 configuration (only for type=oauth).
+        properties:
+          provider:
+            type: string
+            enum: [github, google, stripe]
+            description: OAuth provider identifier.
+          client_id:
+            type: string
+            description: OAuth client ID (stored in config, not a secret).
+          auth_url:
+            type: string
+            format: uri
+            description: OAuth authorization endpoint.
+          token_url:
+            type: string
+            format: uri
+            description: OAuth token endpoint.
+          scopes:
+            type: array
+            items:
+              type: string
+            description: OAuth scopes to request.
+          auto_refresh:
+            type: boolean
+            default: true
+            description: Whether to automatically refresh expired tokens.
+          redirect_uri:
+            type: string
+            format: uri
+            default: "http://localhost:9470/api/v1/oauth/callback"
+        required: [provider, client_id]
+
+      credential_patterns:
+        type: array
+        description: |
+          Regex patterns that match this service's credential format.
+          Used by the output sanitizer to detect leaked credentials.
+          Added automatically for known services; specify for custom services.
+        items:
+          type: string
+        examples:
+          - ["sk_live_[a-zA-Z0-9]{24,}", "sk_test_[a-zA-Z0-9]{24,}"]
+          - ["ghp_[a-zA-Z0-9]{36}"]
+
+    required: [type, target]
+
+# =============================================================================
+# Example Configuration
+# =============================================================================
+# version: "1"
+#
+# vault:
+#   address: http://127.0.0.1:9443
+#
+# server:
+#   listen_address: "0.0.0.0:9470"
+#   log_level: info
+#
+# sanitizer:
+#   enabled: true
+#   replacement_template: "[REDACTED:{{.service}}]"
+#
+# services:
+#   stripe:
+#     type: http_proxy
+#     target: https://api.stripe.com
+#     inject: header
+#     header_template: "Bearer {{.secret}}"
+#     default_headers:
+#       Stripe-Version: "2024-12-18"
+#     credential_patterns:
+#       - "sk_live_[a-zA-Z0-9]{24,}"
+#       - "sk_test_[a-zA-Z0-9]{24,}"
+#
+#   github:
+#     type: oauth
+#     target: https://api.github.com
+#     inject: header
+#     header_template: "Bearer {{.secret}}"
+#     exec_config:
+#       env_var: GH_TOKEN
+#       allowed_commands: ["gh", "git"]
+#     oauth_config:
+#       provider: github
+#       client_id: "Ov23li..."
+#       scopes: [repo, read:org]
+#       auto_refresh: true
+#     credential_patterns:
+#       - "ghp_[a-zA-Z0-9]{36}"
+#       - "gho_[a-zA-Z0-9]{36}"
+#
+#   openai:
+#     type: http_proxy
+#     target: https://api.openai.com
+#     inject: header
+#     header_template: "Bearer {{.secret}}"
+#     default_headers:
+#       Content-Type: application/json
+#     exec_config:
+#       env_var: OPENAI_API_KEY
+#     credential_patterns:
+#       - "sk-[a-zA-Z0-9]{48,}"

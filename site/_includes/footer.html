@@ -1,0 +1,52 @@
+<footer class="site-footer" role="contentinfo">
+  <div class="footer-container">
+    <div class="footer-brand">
+      <a href="{{ site.baseurl }}/" class="footer-logo" aria-label="Straylight-AI home">
+        <svg width="24" height="24" viewBox="0 0 28 28" fill="none" aria-hidden="true" focusable="false">
+          <rect width="28" height="28" rx="6" fill="#4f46e5"/>
+          <path d="M6 22 L14 6 L22 22" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <circle cx="14" cy="6" r="2.5" fill="#a5b4fc"/>
+          <line x1="10" y1="17" x2="18" y2="17" stroke="#a5b4fc" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span>Straylight-AI</span>
+      </a>
+      <p class="footer-tagline">Zero-knowledge credential proxy for AI agents.<br>Use AI, with Zero trust.</p>
+      <p class="footer-license">
+        <a href="{{ site.github_url }}/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT License</a>
+        &nbsp;&middot;&nbsp; v0.1.0
+      </p>
+    </div>
+
+    <nav class="footer-nav" aria-label="Footer navigation">
+      <div class="footer-nav-group">
+        <h3 class="footer-nav-heading">Product</h3>
+        <ul role="list">
+          <li><a href="{{ site.baseurl }}/features/">Features</a></li>
+          <li><a href="{{ site.baseurl }}/architecture/">Architecture</a></li>
+          <li><a href="{{ site.baseurl }}/docs/quickstart/">Quickstart</a></li>
+        </ul>
+      </div>
+      <div class="footer-nav-group">
+        <h3 class="footer-nav-heading">Documentation</h3>
+        <ul role="list">
+          <li><a href="{{ site.baseurl }}/docs/">Overview</a></li>
+          <li><a href="{{ site.baseurl }}/docs/user-guide/">User Guide</a></li>
+          <li><a href="{{ site.baseurl }}/docs/faq/">FAQ</a></li>
+        </ul>
+      </div>
+      <div class="footer-nav-group">
+        <h3 class="footer-nav-heading">Community</h3>
+        <ul role="list">
+          <li><a href="{{ site.github_url }}" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+          <li><a href="{{ site.github_url }}/issues" target="_blank" rel="noopener noreferrer">Issues</a></li>
+          <li><a href="{{ site.github_url }}/releases" target="_blank" rel="noopener noreferrer">Releases</a></li>
+        </ul>
+      </div>
+    </nav>
+  </div>
+
+  <div class="footer-bottom">
+    <p>&copy; 2025&ndash;{{ 'now' | date: "%Y" }} High Velocity Solutions LLC. All rights reserved.</p>
+    <p>Built with care for developers who value security.</p>
+  </div>
+</footer>

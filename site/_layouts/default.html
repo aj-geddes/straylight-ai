@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+  <!-- Title & Description -->
+  <title>{% if page.title %}{{ page.title }} | Straylight-AI{% else %}Straylight-AI — Zero-Knowledge Credential Proxy for AI Agents{% endif %}</title>
+  <meta name="description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+
+  <!-- Canonical -->
+  <link rel="canonical" href="{{ page.url | prepend: site.url | prepend: site.baseurl }}">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Straylight-AI">
+  <meta property="og:title" content="{% if page.title %}{{ page.title }} | Straylight-AI{% else %}Straylight-AI — Zero-Knowledge Credential Proxy for AI Agents{% endif %}">
+  <meta property="og:description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+  <meta property="og:url" content="{{ page.url | prepend: site.baseurl | prepend: site.url }}">
+  <meta property="og:image" content="{{ site.url }}{{ site.baseurl }}/assets/images/og-image.png">
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@straylightai">
+  <meta name="twitter:title" content="{% if page.title %}{{ page.title }} | Straylight-AI{% else %}Straylight-AI — Zero-Knowledge Credential Proxy for AI Agents{% endif %}">
+  <meta name="twitter:description" content="{% if page.description %}{{ page.description }}{% else %}{{ site.description }}{% endif %}">
+  <meta name="twitter:image" content="{{ site.url }}{{ site.baseurl }}/assets/images/og-image.png">
+
+  <!-- Theme color -->
+  <meta name="theme-color" content="#4f46e5">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="{{ site.baseurl }}/assets/images/favicon.svg">
+
+  <!-- Critical CSS inline -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; background: #f8fafc; color: #0f172a; }
+    .skip-link { position: absolute; top: -40px; left: 0; background: #4f46e5; color: #fff; padding: 8px 16px; z-index: 9999; text-decoration: none; border-radius: 0 0 4px 0; }
+    .skip-link:focus { top: 0; }
+    .site-nav { position: sticky; top: 0; z-index: 100; background: rgba(248,250,252,0.95); backdrop-filter: blur(8px); border-bottom: 1px solid #e2e8f0; }
+  </style>
+
+  <!-- Main stylesheet (deferred via preload) -->
+  <link rel="preload" href="{{ site.baseurl }}/assets/css/main.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="{{ site.baseurl }}/assets/css/main.css"></noscript>
+
+  <!-- JSON-LD: Organization -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "High Velocity Solutions LLC",
+    "url": "{{ site.url }}{{ site.baseurl }}",
+    "logo": "{{ site.url }}{{ site.baseurl }}/assets/images/logo.png",
+    "sameAs": ["https://github.com/straylight-ai"]
+  }
+  </script>
+
+  {% if page.json_ld %}
+  <script type="application/ld+json">{{ page.json_ld | jsonify }}</script>
+  {% endif %}
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <!-- Navigation -->
+  {% include nav.html %}
+
+  <!-- Page content -->
+  <main id="main-content">
+    {{ content }}
+  </main>
+
+  <!-- Footer -->
+  {% include footer.html %}
+
+  <!-- Scripts (deferred) -->
+  <script src="{{ site.baseurl }}/assets/js/main.js" defer></script>
+</body>
+</html>

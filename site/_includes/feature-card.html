@@ -1,0 +1,49 @@
+<!-- Usage: {% include feature-card.html icon="shield" title="Feature Title" description="Description text" %}  -->
+<div class="feature-card" role="article">
+  <div class="feature-card-icon" aria-hidden="true">
+    {% if include.icon == "shield" %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    </svg>
+    {% elsif include.icon == "key" %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="7.5" cy="15.5" r="5.5"/>
+      <path d="M21 2l-9.6 9.6"/>
+      <path d="M15.5 7.5l3 3L22 7l-3-3"/>
+    </svg>
+    {% elsif include.icon == "plug" %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 22v-5"/>
+      <path d="M9 7V2"/>
+      <path d="M15 7V2"/>
+      <path d="M6 13h12"/>
+      <rect x="2" y="7" width="20" height="8" rx="2"/>
+    </svg>
+    {% elsif include.icon == "filter" %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+    </svg>
+    {% elsif include.icon == "grid" %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="7"/>
+      <rect x="14" y="3" width="7" height="7"/>
+      <rect x="3" y="14" width="7" height="7"/>
+      <rect x="14" y="14" width="7" height="7"/>
+    </svg>
+    {% elsif include.icon == "hook" %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+      <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+      <path d="M12 19v3"/>
+    </svg>
+    {% else %}
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="12"/>
+      <line x1="12" y1="16" x2="12.01" y2="16"/>
+    </svg>
+    {% endif %}
+  </div>
+  <h3 class="feature-card-title">{{ include.title }}</h3>
+  <p class="feature-card-desc">{{ include.description }}</p>
+</div>

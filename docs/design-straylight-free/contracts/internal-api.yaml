@@ -1,0 +1,672 @@
+openapi: "3.1.0"
+info:
+  title: Straylight-AI Internal API
+  description: |
+    Internal HTTP API exposed by the Straylight-AI container on port 9470.
+    Consumed by:
+    - The straylight-mcp host binary (MCP tool call forwarding)
+    - The React Web UI (service management, health monitoring)
+
+    This API is localhost-only and does not require authentication.
+    The container's port 9470 should never be exposed to a network.
+  version: "1.0.0"
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:9470
+    description: Local container
+
+paths:
+  # ==== Health ====
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: System health check
+      description: Returns the health status of all components.
+      tags: [Health]
+      responses:
+        "200":
+          description: System is healthy and ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+                openbao: unsealed
+                services_count: 3
+                uptime_seconds: 3600
+                version: "1.0.0"
+        "503":
+          description: System is unhealthy (OpenBao sealed or unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: degraded
+                openbao: sealed
+                services_count: 0
+                uptime_seconds: 5
+                version: "1.0.0"
+
+  # ==== MCP Tool Forwarding ====
+  /api/v1/mcp/tool-list:
+    get:
+      operationId: mcpToolList
+      summary: List available MCP tools
+      description: Returns the list of MCP tools with their schemas. Called by the straylight-mcp host binary to respond to tools/list requests.
+      tags: [MCP]
+      responses:
+        "200":
+          description: Tool list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/McpToolDefinition"
+
+  /api/v1/mcp/tool-call:
+    post:
+      operationId: mcpToolCall
+      summary: Execute an MCP tool call
+      description: |
+        Executes a tool call and returns the result. Called by the straylight-mcp
+        host binary to forward tools/call requests from the MCP client.
+
+        The response format matches the MCP CallToolResult schema.
+      tags: [MCP]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/McpToolCallRequest"
+            examples:
+              api_call:
+                summary: API call to Stripe
+                value:
+                  tool: straylight_api_call
+                  arguments:
+                    service: stripe
+                    method: GET
+                    path: /v1/balance
+              exec:
+                summary: Execute command with GitHub credentials
+                value:
+                  tool: straylight_exec
+                  arguments:
+                    service: github
+                    command: "gh repo list --json name --limit 5"
+              check:
+                summary: Check credential status
+                value:
+                  tool: straylight_check
+                  arguments:
+                    service: stripe
+              services:
+                summary: List all services
+                value:
+                  tool: straylight_services
+                  arguments: {}
+      responses:
+        "200":
+          description: Tool call result (may include isError for logical errors)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/McpToolCallResponse"
+        "400":
+          description: Invalid request (unknown tool, missing arguments)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ==== Service Management ====
+  /api/v1/services:
+    get:
+      operationId: listServices
+      summary: List all configured services
+      description: Returns all services with their configuration (excluding secrets).
+      tags: [Services]
+      responses:
+        "200":
+          description: Service list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceSummary"
+
+    post:
+      operationId: createService
+      summary: Add a new service with credentials
+      description: |
+        Creates a new service configuration and stores its credential in OpenBao.
+        The credential value is stored and never returned by any subsequent API call.
+      tags: [Services]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateServiceRequest"
+            examples:
+              stripe:
+                summary: Add Stripe with API key
+                value:
+                  name: stripe
+                  type: http_proxy
+                  target: "https://api.stripe.com"
+                  inject: header
+                  header_template: "Bearer {{.secret}}"
+                  credential:
+                    api_key: "sk_live_..."
+              github_key:
+                summary: Add GitHub with PAT
+                value:
+                  name: github
+                  type: http_proxy
+                  target: "https://api.github.com"
+                  inject: header
+                  header_template: "Bearer {{.secret}}"
+                  credential:
+                    token: "ghp_..."
+                  exec_config:
+                    env_var: GH_TOKEN
+      responses:
+        "201":
+          description: Service created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Service name already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/services/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,62}$"
+        description: Service name (lowercase, alphanumeric, hyphens, underscores)
+
+    get:
+      operationId: getService
+      summary: Get service details
+      description: Returns service configuration (excluding credential values).
+      tags: [Services]
+      responses:
+        "200":
+          description: Service details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceDetail"
+        "404":
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    put:
+      operationId: updateService
+      summary: Update service configuration
+      description: Updates service configuration and/or credential. Credential is optional -- if omitted, existing credential is preserved.
+      tags: [Services]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateServiceRequest"
+      responses:
+        "200":
+          description: Service updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSummary"
+        "404":
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      operationId: deleteService
+      summary: Delete a service and its credentials
+      description: Removes the service configuration and deletes all associated credentials from OpenBao.
+      tags: [Services]
+      responses:
+        "204":
+          description: Service deleted
+        "404":
+          description: Service not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/services/{name}/check:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+
+    get:
+      operationId: checkServiceCredential
+      summary: Check credential status
+      description: Returns whether the credential is available, expired, or missing. Never returns the credential value.
+      tags: [Services]
+      responses:
+        "200":
+          description: Credential status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CredentialStatus"
+
+  # ==== OAuth ====
+  /api/v1/oauth/{provider}/start:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [github, google, stripe]
+        description: OAuth provider name
+
+    get:
+      operationId: oauthStart
+      summary: Start OAuth authorization flow
+      description: Redirects the browser to the OAuth provider's authorization page.
+      tags: [OAuth]
+      responses:
+        "302":
+          description: Redirect to OAuth provider
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+
+  /api/v1/oauth/callback:
+    get:
+      operationId: oauthCallback
+      summary: OAuth callback handler
+      description: |
+        Handles the OAuth authorization code callback. Exchanges the code for
+        tokens, stores them in OpenBao, and redirects to the Web UI.
+      tags: [OAuth]
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to Web UI with success/failure status
+          headers:
+            Location:
+              schema:
+                type: string
+        "400":
+          description: Invalid state or code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ==== Service Templates ====
+  /api/v1/templates:
+    get:
+      operationId: listServiceTemplates
+      summary: List available service templates
+      description: Returns pre-configured templates for common services (Stripe, GitHub, OpenAI, etc.) to simplify service setup in the Web UI.
+      tags: [Templates]
+      responses:
+        "200":
+          description: Template list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceTemplate"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, error]
+        openbao:
+          type: string
+          enum: [unsealed, sealed, unavailable]
+        services_count:
+          type: integer
+        uptime_seconds:
+          type: integer
+        version:
+          type: string
+      required: [status, openbao, services_count, version]
+
+    McpToolDefinition:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        inputSchema:
+          type: object
+      required: [name, description, inputSchema]
+
+    McpToolCallRequest:
+      type: object
+      properties:
+        tool:
+          type: string
+          enum:
+            - straylight_api_call
+            - straylight_exec
+            - straylight_check
+            - straylight_services
+        arguments:
+          type: object
+      required: [tool, arguments]
+
+    McpToolCallResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                const: text
+              text:
+                type: string
+            required: [type, text]
+        isError:
+          type: boolean
+      required: [content]
+
+    ServiceSummary:
+      type: object
+      description: Service information without credential values.
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,62}$"
+        type:
+          type: string
+          enum: [http_proxy, oauth]
+        status:
+          type: string
+          enum: [available, expired, not_configured, error]
+        target:
+          type: string
+          format: uri
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [api_call, exec]
+        created_at:
+          type: string
+          format: date-time
+        last_used:
+          type: string
+          format: date-time
+          nullable: true
+      required: [name, type, status, capabilities]
+
+    ServiceDetail:
+      allOf:
+        - $ref: "#/components/schemas/ServiceSummary"
+        - type: object
+          properties:
+            inject:
+              type: string
+              enum: [header, query, body]
+            header_template:
+              type: string
+              description: "Template for header injection, e.g. 'Bearer {{.secret}}'"
+            exec_config:
+              type: object
+              properties:
+                env_var:
+                  type: string
+                  description: Environment variable name for credential injection
+            oauth_config:
+              type: object
+              properties:
+                provider:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                auto_refresh:
+                  type: boolean
+
+    CreateServiceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,62}$"
+          description: Unique service name. Lowercase, alphanumeric, hyphens, underscores.
+        type:
+          type: string
+          enum: [http_proxy, oauth]
+        target:
+          type: string
+          format: uri
+          description: Base URL of the external service.
+        inject:
+          type: string
+          enum: [header, query, body]
+          default: header
+        header_template:
+          type: string
+          default: "Bearer {{.secret}}"
+        credential:
+          type: object
+          description: |
+            Credential key-value pairs. The keys depend on the service type.
+            For API keys: { "api_key": "sk_..." }
+            For tokens: { "token": "ghp_..." }
+            This field is write-only; it is never returned by GET endpoints.
+          additionalProperties:
+            type: string
+        exec_config:
+          type: object
+          properties:
+            env_var:
+              type: string
+        oauth_config:
+          type: object
+          properties:
+            provider:
+              type: string
+            client_id:
+              type: string
+            client_secret:
+              type: string
+            scopes:
+              type: array
+              items:
+                type: string
+            auto_refresh:
+              type: boolean
+              default: true
+      required: [name, type, target]
+
+    UpdateServiceRequest:
+      type: object
+      properties:
+        target:
+          type: string
+          format: uri
+        inject:
+          type: string
+          enum: [header, query, body]
+        header_template:
+          type: string
+        credential:
+          type: object
+          additionalProperties:
+            type: string
+          description: If provided, replaces the existing credential.
+        exec_config:
+          type: object
+          properties:
+            env_var:
+              type: string
+
+    CredentialStatus:
+      type: object
+      properties:
+        service:
+          type: string
+        status:
+          type: string
+          enum: [available, expired, not_configured, error]
+        type:
+          type: string
+          enum: [api_key, oauth, token]
+        expires:
+          type: string
+          format: date-time
+          nullable: true
+        auto_refresh:
+          type: boolean
+        scopes:
+          type: array
+          items:
+            type: string
+        last_used:
+          type: string
+          format: date-time
+          nullable: true
+        message:
+          type: string
+          nullable: true
+      required: [service, status]
+
+    ServiceTemplate:
+      type: object
+      description: Pre-configured template for a common service.
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        icon:
+          type: string
+          description: Icon identifier for the Web UI tile
+        description:
+          type: string
+        type:
+          type: string
+          enum: [http_proxy, oauth]
+        target:
+          type: string
+          format: uri
+        inject:
+          type: string
+        header_template:
+          type: string
+        credential_fields:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              label:
+                type: string
+              placeholder:
+                type: string
+              type:
+                type: string
+                enum: [text, password]
+            required: [key, label]
+        oauth_config:
+          type: object
+          properties:
+            provider:
+              type: string
+            default_scopes:
+              type: array
+              items:
+                type: string
+        exec_config:
+          type: object
+          properties:
+            env_var:
+              type: string
+      required: [id, display_name, type, target]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              examples: [service_not_found, validation_error, vault_unavailable]
+            message:
+              type: string
+              description: Human-readable error message
+            details:
+              type: object
+              description: Additional error context
+          required: [code, message]
+      required: [error]

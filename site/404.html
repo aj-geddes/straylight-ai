@@ -1,0 +1,33 @@
+---
+layout: default
+title: "Page Not Found — 404"
+description: "The page you requested could not be found. Browse Straylight-AI documentation or return to the home page."
+permalink: /404.html
+---
+
+<div class="error-page">
+  <div>
+    <div class="error-code" aria-hidden="true">404</div>
+    <h1 class="error-title">Page not found</h1>
+    <p class="error-description">
+      The page you're looking for doesn't exist or may have moved.
+      Try the documentation or head back to the home page.
+    </p>
+    <div class="error-actions">
+      <a href="{{ site.baseurl }}/" class="btn btn-primary btn-md">Go home</a>
+      <a href="{{ site.baseurl }}/docs/" class="btn btn-ghost btn-md">Documentation</a>
+    </div>
+
+    <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--color-border);">
+      <p style="font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: 1rem;">Looking for something specific?</p>
+      <ul style="list-style:none; padding:0; display:flex; flex-direction:column; gap:0.5rem; align-items:center;">
+        <li><a href="{{ site.baseurl }}/docs/quickstart/" style="font-size:0.875rem;">Quickstart Guide</a></li>
+        <li><a href="{{ site.baseurl }}/docs/user-guide/" style="font-size:0.875rem;">User Guide</a></li>
+        <li><a href="{{ site.baseurl }}/docs/faq/" style="font-size:0.875rem;">FAQ</a></li>
+        <li><a href="{{ site.baseurl }}/features/" style="font-size:0.875rem;">Features</a></li>
+        <li><a href="{{ site.baseurl }}/architecture/" style="font-size:0.875rem;">Architecture</a></li>
+        <li><a href="{{ site.github_url }}" target="_blank" rel="noopener noreferrer" style="font-size:0.875rem;">GitHub Repository</a></li>
+      </ul>
+    </div>
+  </div>
+</div>

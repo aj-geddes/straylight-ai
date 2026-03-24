@@ -1,0 +1,76 @@
+title: "Straylight-AI"
+description: "Zero-knowledge credential proxy for AI agents. Keep API keys out of your agent's context window with self-hosted vault storage and MCP integration."
+url: "https://straylight-ai.github.io"
+baseurl: "/straylight"
+lang: "en"
+
+# Author / Organization
+author:
+  name: "High Velocity Solutions LLC"
+  url: "https://github.com/straylight-ai"
+
+# Repository
+repository: "straylight-ai/straylight"
+github_url: "https://github.com/straylight-ai/straylight"
+
+# Build
+markdown: kramdown
+highlighter: rouge
+permalink: pretty
+
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+
+# Plugins
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
+
+# SEO defaults
+twitter:
+  username: straylightai
+  card: summary_large_image
+
+social:
+  name: "Straylight-AI"
+  links:
+    - "https://github.com/straylight-ai/straylight"
+
+# Sass
+sass:
+  style: compressed
+  sass_dir: assets/css
+
+# Collections
+collections:
+  docs:
+    output: true
+    permalink: /docs/:name/
+
+defaults:
+  - scope:
+      path: ""
+      type: "docs"
+    values:
+      layout: "doc"
+  - scope:
+      path: ""
+      type: "pages"
+    values:
+      layout: "default"
+  - scope:
+      path: "index.html"
+    values:
+      layout: "default"
+
+# Exclude from build
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+  - .sass-cache
+  - .jekyll-cache
+  - README.md

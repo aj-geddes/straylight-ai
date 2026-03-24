@@ -1,0 +1,350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Straylight-AI MCP Tool Definitions",
+  "description": "JSON Schema definitions for all four Straylight-AI MCP tools. These define the tool registration (name, description, inputSchema) and the expected response format for each tool.",
+
+  "tools": [
+    {
+      "name": "straylight_api_call",
+      "description": "Make an authenticated HTTP request to an external service through Straylight-AI. The credential is injected by the proxy — you never see or handle the secret. Use this for any API call that requires authentication.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "The name of the configured service (e.g., 'stripe', 'github', 'openai'). Must match a service registered in Straylight-AI.",
+            "examples": ["stripe", "github", "openai"]
+          },
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+            "description": "HTTP method for the request.",
+            "default": "GET"
+          },
+          "path": {
+            "type": "string",
+            "description": "The API path (appended to the service's base URL). Must start with '/'.",
+            "pattern": "^/",
+            "examples": ["/v1/balance", "/repos/owner/repo/issues", "/v1/chat/completions"]
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Additional HTTP headers to include in the request. Authorization headers are injected automatically — do NOT include them here.",
+            "default": {}
+          },
+          "query": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Query string parameters as key-value pairs.",
+            "default": {}
+          },
+          "body": {
+            "description": "Request body. For JSON APIs, provide an object. For form data, provide a URL-encoded string.",
+            "oneOf": [
+              { "type": "object" },
+              { "type": "string" },
+              { "type": "null" }
+            ],
+            "default": null
+          }
+        },
+        "required": ["service", "path"],
+        "additionalProperties": false
+      },
+      "response": {
+        "description": "MCP tool result format",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Sanitized response body from the external service. Any credential patterns are replaced with [REDACTED:service-name]."
+                  }
+                },
+                "required": ["type", "text"]
+              }
+            },
+            "isError": {
+              "type": "boolean",
+              "description": "True if the request failed (network error, 4xx/5xx, or service not found)."
+            }
+          },
+          "required": ["content"]
+        },
+        "examples": {
+          "success": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"object\":\"balance\",\"available\":[{\"amount\":12345,\"currency\":\"usd\"}],\"pending\":[{\"amount\":0,\"currency\":\"usd\"}]}"
+              }
+            ]
+          },
+          "error_service_not_found": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Error: service 'invalid-service' is not configured. Run 'straylight_services' to see available services."
+              }
+            ],
+            "isError": true
+          },
+          "error_credential_missing": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Error: no credential configured for service 'stripe'. Add a credential at http://localhost:9470."
+              }
+            ],
+            "isError": true
+          },
+          "error_upstream": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Error: upstream returned HTTP 401 Unauthorized. The credential may be expired or invalid."
+              }
+            ],
+            "isError": true
+          }
+        }
+      }
+    },
+
+    {
+      "name": "straylight_exec",
+      "description": "Execute a command with credentials injected as environment variables. The command runs inside the Straylight-AI container with the appropriate secrets set in the environment. Output (stdout/stderr) is sanitized to remove any credential values before being returned to you.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "The name of the configured service whose credentials should be injected into the command's environment.",
+            "examples": ["github", "aws"]
+          },
+          "command": {
+            "type": "string",
+            "description": "The command to execute. Credentials are injected via environment variables (e.g., GH_TOKEN, AWS_ACCESS_KEY_ID) — do NOT include secrets in the command string.",
+            "examples": [
+              "gh repo list --json name,url --limit 10",
+              "aws s3 ls",
+              "curl -H \"Authorization: Bearer $TOKEN\" https://api.example.com/data"
+            ]
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "description": "Maximum execution time in seconds. Command is killed after this timeout.",
+            "default": 30,
+            "minimum": 1,
+            "maximum": 300
+          }
+        },
+        "required": ["service", "command"],
+        "additionalProperties": false
+      },
+      "response": {
+        "description": "MCP tool result format",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "Combined stdout and stderr output, sanitized. Credential values are replaced with [REDACTED:service-name]. Includes exit code."
+                  }
+                },
+                "required": ["type", "text"]
+              }
+            },
+            "isError": {
+              "type": "boolean",
+              "description": "True if the command failed (non-zero exit code, timeout, or service not found)."
+            }
+          },
+          "required": ["content"]
+        },
+        "examples": {
+          "success": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Exit code: 0\n\nSTDOUT:\n[{\"name\":\"my-repo\",\"url\":\"https://github.com/user/my-repo\"}]\n\nSTDERR:\n(empty)"
+              }
+            ]
+          },
+          "error_timeout": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Error: command timed out after 30 seconds."
+              }
+            ],
+            "isError": true
+          },
+          "error_nonzero": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Exit code: 1\n\nSTDOUT:\n(empty)\n\nSTDERR:\nfatal: not a git repository"
+              }
+            ],
+            "isError": true
+          }
+        }
+      }
+    },
+
+    {
+      "name": "straylight_check",
+      "description": "Check whether a credential is available and valid for a given service. Use this before making API calls to verify the service is configured and the credential has not expired.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string",
+            "description": "The name of the service to check.",
+            "examples": ["stripe", "github", "openai"]
+          }
+        },
+        "required": ["service"],
+        "additionalProperties": false
+      },
+      "response": {
+        "description": "MCP tool result format",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "JSON object with credential status. Never contains the actual credential value."
+                  }
+                },
+                "required": ["type", "text"]
+              }
+            }
+          },
+          "required": ["content"]
+        },
+        "examples": {
+          "available_static": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"service\":\"stripe\",\"status\":\"available\",\"type\":\"api_key\",\"expires\":null,\"last_used\":\"2026-03-22T10:30:00Z\"}"
+              }
+            ]
+          },
+          "available_oauth": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"service\":\"github\",\"status\":\"available\",\"type\":\"oauth\",\"expires\":\"2026-03-22T11:30:00Z\",\"auto_refresh\":true,\"scopes\":[\"repo\",\"read:org\"]}"
+              }
+            ]
+          },
+          "expired": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"service\":\"github\",\"status\":\"expired\",\"type\":\"oauth\",\"expires\":\"2026-03-21T08:00:00Z\",\"auto_refresh\":false,\"message\":\"OAuth token expired. Re-authorize at http://localhost:9470.\"}"
+              }
+            ]
+          },
+          "not_configured": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"service\":\"slack\",\"status\":\"not_configured\",\"message\":\"Service 'slack' is not configured. Add it at http://localhost:9470.\"}"
+              }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "name": "straylight_services",
+      "description": "List all services configured in Straylight-AI and their capabilities. Use this to discover what services are available before making API calls or running commands.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "response": {
+        "description": "MCP tool result format",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "type": "string",
+                    "description": "JSON array of service objects with names, capabilities, and status."
+                  }
+                },
+                "required": ["type", "text"]
+              }
+            }
+          },
+          "required": ["content"]
+        },
+        "examples": {
+          "multiple_services": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"services\":[{\"name\":\"stripe\",\"type\":\"http_proxy\",\"status\":\"available\",\"capabilities\":[\"api_call\"],\"base_url\":\"https://api.stripe.com\"},{\"name\":\"github\",\"type\":\"oauth\",\"status\":\"available\",\"capabilities\":[\"api_call\",\"exec\"],\"base_url\":\"https://api.github.com\",\"scopes\":[\"repo\",\"read:org\"]},{\"name\":\"openai\",\"type\":\"http_proxy\",\"status\":\"available\",\"capabilities\":[\"api_call\"],\"base_url\":\"https://api.openai.com\"}]}"
+              }
+            ]
+          },
+          "no_services": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"services\":[],\"message\":\"No services configured. Add services at http://localhost:9470.\"}"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
