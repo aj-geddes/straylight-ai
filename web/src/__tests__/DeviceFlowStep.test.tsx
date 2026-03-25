@@ -43,7 +43,7 @@ describe('DeviceFlowStep - initial state', () => {
         onSuccess={vi.fn()}
       />
     );
-    expect(screen.getByText(/github\.com\/login\/device/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /start authorization/i })).toBeInTheDocument();
   });
 
   it('shows the GitHub provider name', () => {

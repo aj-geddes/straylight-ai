@@ -30,7 +30,7 @@ func TestSecurityHeaders_PresentOnAllResponses(t *testing.T) {
 	requiredHeaders := map[string]string{
 		"X-Content-Type-Options":    "nosniff",
 		"X-Frame-Options":           "DENY",
-		"Content-Security-Policy":   "default-src 'self'",
+		"Content-Security-Policy":   "default-src 'self'; img-src 'self' https://*.githubusercontent.com https://*.gravatar.com https://*.gitlab.com https://avatars.slack-edge.com https://lh3.googleusercontent.com",
 		"X-Xss-Protection":          "1; mode=block",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",
 	}

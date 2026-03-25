@@ -291,14 +291,18 @@ func TestFilterTemplatesForPersonalTier_FacebookExcluded(t *testing.T) {
 	}
 }
 
-// TestFilterTemplatesForPersonalTier_AWSExcluded verifies that AWS is dropped
-// because all its auth methods use named_strategy (aws_sigv4).
-func TestFilterTemplatesForPersonalTier_AWSExcluded(t *testing.T) {
+// TestFilterTemplatesForPersonalTier_AWSIncluded verifies that AWS is included
+// because its auth methods use connection_string strategy (allowed in personal tier).
+func TestFilterTemplatesForPersonalTier_AWSIncluded(t *testing.T) {
 	result := services.FilterTemplatesForPersonalTier(services.ServiceTemplates)
+	found := false
 	for _, tmpl := range result {
 		if tmpl.ID == "aws" {
-			t.Error("expected 'aws' template to be excluded from personal tier (named_strategy only)")
+			found = true
 		}
+	}
+	if !found {
+		t.Error("expected 'aws' template to be present in personal tier (connection_string strategy)")
 	}
 }
 
