@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Straylight-AI — Zero-knowledge credential proxy for AI agents" width="600">
+  <img src="assets/logo.png" alt="Straylight-AI — Keep your API keys safe from AI coding assistants" width="600">
 </p>
 
 <h1 align="center">Straylight-AI</h1>
 
-<p align="center"><strong>Zero-knowledge credential proxy for AI agents.</strong></p>
+<p align="center"><strong>Keep your API keys safe when using Claude Code, Cursor, and Windsurf.</strong></p>
 <p align="center"><em>Use AI, with Zero trust.</em></p>
 
 <p align="center">
@@ -16,16 +16,21 @@
 
 ## The Problem
 
-AI coding assistants need credentials to interact with external services. Today,
-those credentials are exposed directly into the agent's context window. Prompt
-injection, log capture, and conversation exports can all leak your secrets.
+Every time Claude Code reads your `.env` file, accesses shell history, or processes
+log output, your API keys enter its context window. From there they can be echoed
+in responses, logged to disk, or exfiltrated through prompt injection.
+
+**This isn't theoretical.** CVE-2025-59536 demonstrated credential leakage via
+crafted API responses. CVE-2026-21852 showed API key exfiltration through malicious
+project configs.
 
 ## The Solution
 
-Straylight-AI lets AI agents use authenticated services without ever seeing the
-credentials. The agent says "call the Stripe API" — Straylight handles credential
-injection at the transport layer. The raw token never enters the agent's context
-window.
+Straylight-AI is a self-hosted credential proxy that sits between your AI coding
+assistant and the outside world. You paste your API keys into a secure vault once.
+When Claude Code, Cursor, or Windsurf needs to call an API, Straylight injects the
+credential at the HTTP transport layer — **your keys never appear in the AI's
+context window, prompts, logs, or responses.**
 
 ## Quick Start
 
@@ -49,9 +54,9 @@ This will:
 
 1. Open http://localhost:9470
 2. Click "Add Service"
-3. Select a template (Stripe, GitHub, OpenAI, etc.) or create a custom service
+3. Select a template (GitHub, Stripe, OpenAI, etc.) or create a custom service
 4. Paste your API key — it goes straight into the encrypted vault
-5. Done. The key is stored and will never be shown again.
+5. Done. The key is stored securely and will never be shown again.
 
 ### Connect to Claude Code
 
@@ -61,23 +66,28 @@ If not auto-registered during setup:
 claude mcp add straylight-ai --transport stdio -- npx straylight-ai mcp
 ```
 
+### Works with Cursor and Windsurf Too
+
+Any MCP-compatible AI coding assistant can use Straylight-AI. The MCP server
+speaks the standard protocol over stdio.
+
 ### Use It
 
-Just work normally with Claude Code:
+Just work normally with your AI coding assistant:
 
 - "Check my GitHub issues"
 - "What's my Stripe balance?"
 - "Create an OpenAI completion"
 
-Claude sees the Straylight-AI tools and uses them automatically. Your credentials
-never enter the conversation.
+Claude Code sees the Straylight-AI MCP tools and uses them automatically. Your
+credentials never enter the conversation.
 
 ## How It Works
 
 ```mermaid
 flowchart LR
     subgraph Host["Your Machine"]
-        A["Claude Code\n/ AI Agent"] -->|stdio| B["straylight-mcp\n(MCP shim)"]
+        A["Claude Code\n/ Cursor / Windsurf"] -->|stdio| B["straylight-mcp\n(MCP shim)"]
     end
 
     subgraph Container["Docker Container (localhost:9470)"]
@@ -101,13 +111,13 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Claude Code
+    participant Dev as Claude Code
     participant MCP as straylight-mcp
     participant Core as Straylight Core
     participant Vault as OpenBao Vault
     participant API as External API
 
-    Agent->>MCP: api_call("github", "GET /user")
+    Dev->>MCP: api_call("github", "GET /user")
     MCP->>Core: HTTP POST /api/v1/mcp/tool-call
     Core->>Vault: Read secret for "github"
     Vault-->>Core: ghp_••••••••
@@ -115,15 +125,32 @@ sequenceDiagram
     API-->>Core: {"login": "aj-geddes", ...}
     Core->>Core: Sanitize output (strip credential patterns)
     Core-->>MCP: {"login": "aj-geddes", ...}
-    MCP-->>Agent: Clean response (no credentials)
+    MCP-->>Dev: Clean response (no credentials)
 
-    Note over Agent: Agent gets data.<br/>Never sees the token.
+    Note over Dev: Your AI assistant gets data.<br/>Never sees the token.
 ```
 
-The `straylight-mcp` shim runs on your host and communicates with Claude Code via
-stdio. It forwards tool calls to the container over localhost HTTP. The container
-fetches credentials from the encrypted vault and injects them into outbound
-requests — the agent only ever sees the API response.
+The `straylight-mcp` shim runs on your host and communicates with your AI coding
+assistant via stdio. It forwards MCP tool calls to the container over localhost
+HTTP. The container fetches credentials from the encrypted vault and injects them
+into outbound requests — **the AI only ever sees the API response, never the key.**
+
+## Supported Services
+
+Straylight-AI ships with 16 pre-configured templates:
+
+| API Services | Cloud Providers | Databases | Other |
+|-------------|----------------|-----------|-------|
+| GitHub | AWS | PostgreSQL | SSH Keys |
+| Stripe | Google Cloud | MySQL | Custom REST APIs |
+| OpenAI | Azure | MongoDB | |
+| Anthropic | | Redis | |
+| Slack | | | |
+| GitLab | | | |
+| Google | | | |
+
+Each service supports multiple auth methods (PATs, API keys, service account
+JSON, connection strings, etc.) — pick the one that matches your credential.
 
 ## CLI Reference
 
@@ -133,214 +160,98 @@ requests — the agent only ever sees the API response.
 | `npx straylight-ai start` | Start the container |
 | `npx straylight-ai stop` | Stop the container |
 | `npx straylight-ai status` | Check health and service status |
-| `npx straylight-ai logs` | Stream container logs |
-| `npx straylight-ai update` | Pull latest image and restart |
 
 ## MCP Tools
 
-Once registered, Claude Code has access to these tools:
+Once registered, your AI coding assistant has access to these tools:
 
 | Tool | What It Does |
 |------|-------------|
-| `straylight_api_call` | Make an authenticated HTTP request to a configured service. Credentials are injected automatically — you never include them. |
-| `straylight_exec` | Run a command inside the container with credentials injected as environment variables. Output is sanitized before being returned. |
-| `straylight_check` | Check whether a credential is available and valid for a given service. |
-| `straylight_services` | List all configured services, their capabilities, and credential status. |
+| `straylight_api_call` | Make an authenticated HTTP request. Credentials injected automatically. |
+| `straylight_exec` | Run a command with credentials as environment variables. Output sanitized. |
+| `straylight_check` | Check whether a credential is available for a service. |
+| `straylight_services` | List all configured services and their status. |
 
-### Example: straylight_api_call
+### Example
 
+Your AI assistant calls:
 ```json
-{
-  "service": "stripe",
-  "method": "GET",
-  "path": "/v1/balance"
-}
+{ "service": "stripe", "method": "GET", "path": "/v1/balance" }
 ```
 
-The `Authorization: Bearer sk_live_...` header is injected by Straylight. The
-agent never sees or handles the key.
-
-### Example: straylight_exec
-
-```json
-{
-  "service": "github",
-  "command": "gh repo list --json name,url --limit 10"
-}
-```
-
-`GH_TOKEN` is set in the subprocess environment. The token does not appear in
-the command string or in the returned output.
-
-## OAuth Services
-
-For OAuth services (GitHub, Google, Stripe Connect):
-
-1. Click "Connect with [Provider]" in the dashboard
-2. Authorize in your browser
-3. Tokens are stored in the vault and auto-refreshed
-
-OAuth tokens expire automatically. When a token expires, the service tile shows
-a yellow "expired" badge. Click it to re-authorize.
+Straylight injects `Authorization: Bearer sk_live_...` into the request. The AI
+gets the balance data back. It never sees or handles the key.
 
 ## Claude Code Hooks (Optional)
 
-For an extra layer of protection, add PreToolUse and PostToolUse hooks. These
-run on your host and block commands that would leak credentials, then sanitize
-any tool output that slips through.
+For extra protection, add PreToolUse and PostToolUse hooks that block commands
+like `echo $STRIPE_API_KEY` before they execute, and sanitize any credential
+patterns that slip into tool output.
 
-Add this to your `.claude/settings.json`:
+Add to `.claude/settings.json`:
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "straylight-mcp hook pretooluse"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "straylight-mcp hook posttooluse"
-          }
-        ]
-      }
-    ]
+    "PreToolUse": [{
+      "matcher": "Bash|Write|Edit",
+      "hooks": [{ "type": "command", "command": "straylight-mcp hook pretooluse" }]
+    }],
+    "PostToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{ "type": "command", "command": "straylight-mcp hook posttooluse" }]
+    }]
   }
 }
 ```
 
-With hooks enabled:
-- `echo $STRIPE_API_KEY` in a Bash tool call is blocked before execution
-- Any credential pattern that appears in tool output is replaced with `[REDACTED:service-name]`
-
 ## Security
 
-Straylight-AI is built around the principle that credentials should never enter
-the agent context window:
-
-- **Encrypted at rest**: All credentials stored in OpenBao (open-source HashiCorp Vault fork)
-- **Injected at the transport layer**: Credentials added to HTTP requests inside the container; the agent sees only the API response
-- **Output sanitized**: Responses are scanned for known credential patterns before being returned
-- **Non-root container**: Runs as UID 10001 with no unnecessary capabilities
-- **No host exposure**: OpenBao port 9443 is not mapped to the host
-- **Rate limiting**: API endpoints are rate-limited to prevent brute-force
-- **CORS locked**: Dashboard only accessible from localhost
+- **Encrypted at rest** — OpenBao (open-source HashiCorp Vault fork)
+- **Transport-layer injection** — credentials added to HTTP requests inside the container, never exposed to the AI
+- **Output sanitization** — two-layer detection strips credential patterns from API responses before they reach the AI
+- **Non-root container** — runs as UID 10001, read-only filesystem, all capabilities dropped
+- **Rate limiting and CORS** — dashboard locked to localhost
 
 ## FAQ
 
-**Does the agent ever see my credentials?**
-No. Credentials are stored in OpenBao inside the container. The proxy injects
-them into outbound HTTP requests. The agent only receives the API response body,
-which is also sanitized for credential patterns before delivery.
+**Does my AI coding assistant ever see my credentials?**
+No. Credentials stay inside the vault. The proxy injects them into HTTP requests.
+The AI only receives the API response, which is also sanitized for credential patterns.
 
-**What if OpenBao crashes?**
-The Straylight-AI process supervises OpenBao and restarts it automatically. If
-it cannot restart, the health endpoint shows a degraded status and MCP tools
-return a clear error rather than crashing.
-
-**Can I use this with services not on the template list?**
-Yes. Select "Custom service" when adding a service and provide the base URL,
-credential injection method (header or query param), and header template.
+**Does this work with Cursor and Windsurf?**
+Yes. Any MCP-compatible AI coding assistant works. The MCP server speaks the
+standard protocol over stdio.
 
 **What happens if I restart the container?**
-Credentials are persisted to the Docker volume at `~/.straylight-ai/data/`. The
-container re-reads the volume on start, re-unseals OpenBao, and is operational
-within seconds.
+Credentials persist in the Docker volume at `~/.straylight-ai/data/`. The
+container re-unseals the vault and is operational within seconds.
 
-**Does this work with Podman?**
-Yes. The CLI auto-detects `podman` if `docker` is not available.
+**Can I use services not on the template list?**
+Yes. Select "Custom Service" and provide the base URL and auth method.
 
-**What Node.js version is required?**
-Node.js 18 or later. Check with `node --version`.
+**Is this open source?**
+Yes. MIT license. Self-hosted. No cloud dependency.
 
 ## Troubleshooting
 
 **`npx straylight-ai` says Docker is not found**
 
-Install Docker Desktop (macOS/Windows) or Docker Engine (Linux):
-- macOS/Windows: https://docs.docker.com/get-docker/
-- Linux: `curl -fsSL https://get.docker.com | sh`
+Install Docker: https://docs.docker.com/get-docker/
 
-**Dashboard shows "connecting..." and never loads**
+**MCP tools not visible in Claude Code**
 
-The container may still be starting. Wait 10–15 seconds and refresh. If it
-persists:
+```bash
+claude mcp add straylight-ai --transport stdio -- npx straylight-ai mcp
+```
+Then restart Claude Code.
+
+**Container health check fails**
 
 ```bash
 npx straylight-ai status
 npx straylight-ai logs
 ```
-
-**MCP tools are not visible in Claude Code**
-
-Re-run the registration step:
-
-```bash
-claude mcp add straylight-ai --transport stdio -- npx straylight-ai mcp
-```
-
-Then restart Claude Code.
-
-**A service shows "expired" status**
-
-The OAuth token has expired. Click the service tile in the dashboard and click
-"Re-authorize". For static API keys, click "Update Credential" and paste a
-fresh key.
-
-**Container starts but health check fails**
-
-Check the logs for OpenBao errors:
-
-```bash
-npx straylight-ai logs
-```
-
-The most common cause is a permission error on the data volume. Verify:
-
-```bash
-ls -la ~/.straylight-ai/data/
-```
-
-The directory should be owned by your user. If not:
-
-```bash
-sudo chown -R $USER ~/.straylight-ai/data/
-npx straylight-ai stop && npx straylight-ai start
-```
-
-## Manual Setup (Without npx)
-
-If you prefer to manage the container directly:
-
-```bash
-# Create data directory
-mkdir -p ~/.straylight-ai/data
-
-# Pull and start
-docker run -d \
-  --name straylight-ai \
-  -p 9470:9470 \
-  -v ~/.straylight-ai/data:/data \
-  --restart unless-stopped \
-  ghcr.io/aj-geddes/straylight-ai:latest
-
-# Register MCP server (requires straylight-mcp binary on PATH)
-claude mcp add straylight-ai --transport stdio -- straylight-mcp
-```
-
-Pre-built `straylight-mcp` binaries for each platform are available on the
-[Releases](https://github.com/aj-geddes/straylight-ai/releases) page.
 
 ## Documentation
 
