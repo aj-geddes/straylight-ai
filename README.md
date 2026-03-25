@@ -270,6 +270,6 @@ MIT — see [LICENSE](LICENSE)
 ---
 
 <p align="center">
-  Built by <a href="https://highvelocitysolutions.com">High Velocity Solutions LLC</a><br>
+  Built by <a href="https://highvelocitysolutions-llc.com">High Velocity Solutions LLC</a><br>
   <a href="https://aj-geddes.github.io/straylight-ai/">Website</a> · <a href="https://aj-geddes.github.io/straylight-ai/docs/quickstart">Docs</a> · <a href="https://github.com/aj-geddes/straylight-ai/issues">Issues</a>
 </p>
