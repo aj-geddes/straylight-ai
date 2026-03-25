@@ -71,7 +71,7 @@ beforeEach(() => {
   // Default: docker available, claude not available
   mockDetectRuntime.mockReturnValue("docker");
   mockBuildRunCommand.mockReturnValue(
-    "docker run -d --name straylight-ai -p 9470:9470 ghcr.io/straylight-ai/straylight:latest"
+    "docker run -d --name straylight-ai -p 9470:9470 ghcr.io/aj-geddes/straylight-ai:latest"
   );
   mockBuildStartCommand.mockReturnValue("docker start straylight-ai");
   mockBuildStopCommand.mockReturnValue("docker stop straylight-ai");
@@ -160,7 +160,7 @@ describe("runSetup", () => {
     vi.resetAllMocks();
     mockDetectRuntime.mockReturnValue("docker");
     mockBuildRunCommand.mockReturnValue(
-      "docker run -d --name straylight-ai -p 9470:9470 ghcr.io/straylight-ai/straylight:latest"
+      "docker run -d --name straylight-ai -p 9470:9470 ghcr.io/aj-geddes/straylight-ai:latest"
     );
     mockBuildStartCommand.mockReturnValue("docker start straylight-ai");
     mockWaitForHealth.mockResolvedValue(HEALTH_RESPONSE);

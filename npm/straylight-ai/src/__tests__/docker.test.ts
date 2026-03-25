@@ -104,7 +104,7 @@ describe("buildRunCommand", () => {
     expect(cmd).toContain("-p 9470:9470");
     expect(cmd).toContain("/data");
     expect(cmd).toContain("--restart unless-stopped");
-    expect(cmd).toContain("ghcr.io/straylight-ai/straylight:latest");
+    expect(cmd).toContain("ghcr.io/aj-geddes/straylight-ai:latest");
   });
 
   it("builds a valid podman run command", () => {

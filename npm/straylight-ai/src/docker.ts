@@ -6,7 +6,7 @@ import * as path from "path";
 export const CONTAINER_NAME = "straylight-ai";
 
 /** Docker image to pull and run */
-export const CONTAINER_IMAGE = "ghcr.io/straylight-ai/straylight:latest";
+export const CONTAINER_IMAGE = "ghcr.io/aj-geddes/straylight-ai:latest";
 
 /** Host port mapped to container port 9470 */
 export const CONTAINER_PORT = 9470;
