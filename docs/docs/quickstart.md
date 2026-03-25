@@ -59,15 +59,15 @@ MCP server listening
 Registering with Claude Code... OK
 
 Straylight-AI is running!
-Dashboard: http://localhost:4242
+Dashboard: http://localhost:9470
 MCP endpoint: stdio via npx straylight-ai mcp
 ```
 
-Open the dashboard: [http://localhost:4242](http://localhost:4242)
+Open the dashboard: [http://localhost:9470](http://localhost:9470)
 
 ## Step 2: Add Your First Service
 
-Open the Straylight-AI dashboard at `http://localhost:4242` and click **Add Service**.
+Open the Straylight-AI dashboard at `http://localhost:9470` and click **Add Service**.
 
 The service wizard walks you through three steps:
 
@@ -230,9 +230,9 @@ Your credentials are preserved in the named volume.
 
 Start Docker Desktop or the Docker daemon and try again.
 
-### "Port 4242 is already in use"
+### "Port 9470 is already in use"
 
-Another process is using port 4242. Either stop it or specify a different port:
+Another process is using port 9470. Either stop it or specify a different port:
 
 ```bash
 STRAYLIGHT_PORT=4243 npx straylight-ai

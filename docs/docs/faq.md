@@ -53,11 +53,11 @@ Straylight closes all of these vectors through Claude Code hooks (blocks `.env` 
 
 ### What happens to my credentials if someone else accesses the dashboard?
 
-The dashboard is served on `localhost:4242` by default and is only accessible from the machine running Docker. It is not accessible over the network unless you explicitly expose it.
+The dashboard is served on `localhost:9470` by default and is only accessible from the machine running Docker. It is not accessible over the network unless you explicitly expose it.
 
 Even if someone accesses the dashboard, they cannot view credential values — the dashboard never displays full credential values, only masked versions (last 4 characters). Credentials are only readable by processes that authenticate to the vault using the AppRole credentials, which are internal to the container.
 
-If you need to secure the dashboard further (shared machine, CI server), you can add HTTP basic auth via a reverse proxy (nginx, Caddy) in front of port 4242.
+If you need to secure the dashboard further (shared machine, CI server), you can add HTTP basic auth via a reverse proxy (nginx, Caddy) in front of port 9470.
 
 ---
 
@@ -188,15 +188,15 @@ If you need a template for a commonly-used service that isn't included, open a G
 Yes. You can run multiple containers on different ports:
 
 ```bash
-STRAYLIGHT_PORT=4242 npx straylight-ai  # First instance
-STRAYLIGHT_PORT=4252 npx straylight-ai  # Second instance
+npx straylight-ai                        # First instance (port 9470)
+STRAYLIGHT_PORT=9471 npx straylight-ai   # Second instance (port 9471)
 ```
 
 Register each with Claude Code under a different name:
 
 ```bash
-claude mcp add work-straylight --transport stdio -- npx straylight-ai mcp --port 4243
-claude mcp add personal-straylight --transport stdio -- npx straylight-ai mcp --port 4253
+claude mcp add work-straylight --transport stdio -- npx straylight-ai mcp
+claude mcp add personal-straylight --transport stdio -- npx straylight-ai mcp --port 9471
 ```
 
 ---

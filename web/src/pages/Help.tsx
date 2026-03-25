@@ -82,7 +82,7 @@ const TROUBLESHOOTING_ITEMS = [
     title: 'Claude Code cannot find the MCP server',
     steps: [
       'Verify the server is running: curl http://localhost:9470/api/v1/health',
-      'Re-run: claude mcp add straylight http://localhost:9470',
+      'Re-run: claude mcp add straylight-ai --transport stdio -- npx straylight-ai mcp',
       'Restart Claude Code after adding the server.',
     ],
   },
@@ -148,7 +148,7 @@ export function Help() {
                 Register Straylight as an MCP server so Claude Code can use your services:
               </p>
               <pre className="mt-2 rounded-md bg-slate-900 px-4 py-3 text-xs text-green-300 overflow-x-auto">
-                <code>claude mcp add straylight http://localhost:9470</code>
+                <code>claude mcp add straylight-ai --transport stdio -- npx straylight-ai mcp</code>
               </pre>
             </div>
           </li>
@@ -171,7 +171,7 @@ export function Help() {
             Register with Claude Code
           </p>
           <pre className="text-sm text-slate-800 dark:text-slate-200 overflow-x-auto">
-            <code>claude mcp add straylight http://localhost:9470</code>
+            <code>claude mcp add straylight-ai --transport stdio -- npx straylight-ai mcp</code>
           </pre>
         </div>
         <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">

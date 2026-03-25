@@ -16,7 +16,7 @@ adding services, using MCP tools in Claude Code, configuration, and troubleshoot
 
 ## Dashboard Overview
 
-The dashboard is available at `http://localhost:4242` while Straylight-AI is running.
+The dashboard is available at `http://localhost:9470` while Straylight-AI is running.
 
 ### Services Page (Home)
 
@@ -41,7 +41,7 @@ Click a service card to see full details:
 
 Accessible from the nav. Configuration options include:
 
-- **Port** — Dashboard and API port (default 4242)
+- **Port** — Dashboard and API port (default 9470)
 - **MCP port** — MCP server port (default 4243)
 - **Log level** — debug, info, warn, error
 - **Vault address** — If running OpenBao separately (default: built-in)
@@ -350,7 +350,7 @@ Set these when starting the container via `docker run` or in a `.env` file along
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STRAYLIGHT_PORT` | `4242` | Dashboard and REST API port |
+| `STRAYLIGHT_PORT` | `9470` | Dashboard and REST API port |
 | `STRAYLIGHT_MCP_PORT` | `4243` | MCP server port (stdio transport ignores this) |
 | `STRAYLIGHT_LOG_LEVEL` | `info` | Log verbosity: debug, info, warn, error |
 | `STRAYLIGHT_VAULT_ADDR` | `http://localhost:8200` | OpenBao vault address |
@@ -369,7 +369,7 @@ services:
     container_name: straylight-ai
     restart: unless-stopped
     ports:
-      - "4242:4242"
+      - "9470:9470"
     volumes:
       - straylight-vault-data:/vault/data
     environment:
