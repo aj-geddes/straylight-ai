@@ -73,6 +73,9 @@ jobs:
     needs: [test-go, test-web]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -95,7 +98,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
 
   npm-publish:
-    needs: [test-npm, docker]
+    needs: [test-npm]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     steps:
