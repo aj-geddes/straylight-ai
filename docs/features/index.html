@@ -1,7 +1,7 @@
 ---
 layout: default
-title: "Features — Zero-Knowledge Proxy, MCP Tools, Vault Storage"
-description: "Explore Straylight-AI's features: zero-knowledge credential proxy, encrypted OpenBao vault, 4 MCP tools, output sanitization, 16 service templates, and Claude Code hooks."
+title: "Features — Zero-Knowledge Proxy, MCP Tools, Vault Storage, Dynamic Secrets"
+description: "Explore Straylight-AI's features: zero-knowledge credential proxy, encrypted OpenBao vault, 7 MCP tools, dynamic database credentials, cloud provider temporary credentials, secret scanner, file firewall, credential audit trail, and Claude Code hooks."
 permalink: /features/
 ---
 
@@ -195,9 +195,9 @@ permalink: /features/
     <div class="feature-section-inner">
       <div class="feature-text">
         <div class="section-label">MCP Integration</div>
-        <h2 id="feat-mcp-heading">Four MCP Tools</h2>
+        <h2 id="feat-mcp-heading">Seven MCP Tools</h2>
         <p>
-          Straylight exposes four tools via the Model Context Protocol, compatible with
+          Straylight exposes seven tools via the Model Context Protocol, compatible with
           Claude Code, Cursor, Windsurf, and any MCP-compatible client. The tools are
           registered automatically when you run <code>npx straylight-ai</code>.
         </p>
@@ -205,7 +205,7 @@ permalink: /features/
         <div class="mcp-tools-list">
           <div class="mcp-tool">
             <div class="mcp-tool-header">
-              <code class="mcp-tool-name">api_call</code>
+              <code class="mcp-tool-name">straylight_api_call</code>
               <span class="mcp-tool-badge">Primary</span>
             </div>
             <p class="mcp-tool-desc">
@@ -214,7 +214,7 @@ permalink: /features/
               <code>body</code> (optional), <code>headers</code> (optional).
               Credentials injected automatically.
             </p>
-            <pre class="mcp-example"><code>api_call({
+            <pre class="mcp-example"><code>straylight_api_call({
   "service": "github",
   "method": "GET",
   "path": "/user/repos"
@@ -223,18 +223,19 @@ permalink: /features/
 
           <div class="mcp-tool">
             <div class="mcp-tool-header">
-              <code class="mcp-tool-name">exec</code>
+              <code class="mcp-tool-name">straylight_exec</code>
             </div>
             <p class="mcp-tool-desc">
               Execute a command with service credentials injected as environment variables
-              in an isolated subprocess. The agent sees the output but never the env vars.
+              in an isolated subprocess. The AI coding assistant sees the output but never the env vars.
               Useful for CLI tools like <code>aws</code>, <code>gcloud</code>, <code>stripe</code>.
+              In v0.2.0, cloud provider commands receive ephemeral STS/GCP/Azure credentials.
             </p>
           </div>
 
           <div class="mcp-tool">
             <div class="mcp-tool-header">
-              <code class="mcp-tool-name">check</code>
+              <code class="mcp-tool-name">straylight_check</code>
             </div>
             <p class="mcp-tool-desc">
               Verify connectivity and authentication status for a configured service.
@@ -245,12 +246,48 @@ permalink: /features/
 
           <div class="mcp-tool">
             <div class="mcp-tool-header">
-              <code class="mcp-tool-name">services</code>
+              <code class="mcp-tool-name">straylight_services</code>
             </div>
             <p class="mcp-tool-desc">
               List all configured services and their current status (connected, error,
-              unconfigured). The agent can see what services are available without knowing
-              any credentials. Used for capability discovery.
+              unconfigured). The AI coding assistant can see what services are available without
+              knowing any credentials. Used for capability discovery.
+            </p>
+          </div>
+
+          <div class="mcp-tool">
+            <div class="mcp-tool-header">
+              <code class="mcp-tool-name">straylight_db_query</code>
+              <span class="mcp-tool-badge">New in v0.2.0</span>
+            </div>
+            <p class="mcp-tool-desc">
+              Query a configured database. Straylight provisions a temporary scoped user,
+              executes the query, and returns results. The database password is never in
+              the AI's context at any point.
+            </p>
+          </div>
+
+          <div class="mcp-tool">
+            <div class="mcp-tool-header">
+              <code class="mcp-tool-name">straylight_scan</code>
+              <span class="mcp-tool-badge">New in v0.2.0</span>
+            </div>
+            <p class="mcp-tool-desc">
+              Scan the current project directory for exposed secrets. Returns findings by
+              file, line, and pattern category. Generates recommended ignore file entries
+              for Claude Code, Cursor, Windsurf, and Roo.
+            </p>
+          </div>
+
+          <div class="mcp-tool">
+            <div class="mcp-tool-header">
+              <code class="mcp-tool-name">straylight_read_file</code>
+              <span class="mcp-tool-badge">New in v0.2.0</span>
+            </div>
+            <p class="mcp-tool-desc">
+              Read a file with secrets automatically redacted. Blocked file types return
+              a vault-redirect message. Config files are returned with structure intact
+              and secret values masked as <code>[STRAYLIGHT:service-name]</code>.
             </p>
           </div>
         </div>
@@ -566,13 +603,365 @@ permalink: /features/
   </div>
 </section>
 
+<!-- Feature 7: Dynamic Database Credentials -->
+<section class="feature-section" id="dynamic-db-credentials" aria-labelledby="feat-db-creds-heading">
+  <div class="container">
+    <div class="feature-section-inner">
+      <div class="feature-text">
+        <div class="section-label">Dynamic Secrets</div>
+        <h2 id="feat-db-creds-heading">Dynamic Database Credentials</h2>
+        <p>
+          Connect your PostgreSQL, MySQL, or Redis database. Straylight creates temporary
+          users with limited permissions and auto-revokes them. Your AI coding assistant
+          queries the database without ever seeing a password.
+        </p>
+        <p>
+          When your AI coding assistant calls the <code>straylight_db_query</code> MCP tool,
+          Straylight provisions a temporary database user via the OpenBao database secrets
+          engine, executes the query through an internal connection pool, and revokes the user
+          when the lease expires. No static database password is ever needed in a config file.
+        </p>
+        <ul class="feature-list">
+          <li>Temporary users created on demand with scoped permissions (read-only by default)</li>
+          <li>Leases expire in 5&ndash;15 minutes and are auto-revoked via OpenBao</li>
+          <li>Lease-aware credential cache replaces fixed-TTL caching for dynamic secrets</li>
+          <li>Supports PostgreSQL, MySQL, MariaDB, and Redis (OpenBao built-in plugins)</li>
+          <li>Database admin credentials stored in vault, never exposed to the AI</li>
+        </ul>
+      </div>
+      <div class="feature-detail-diagram" aria-hidden="true">
+        <svg viewBox="0 0 360 260" width="100%" xmlns="http://www.w3.org/2000/svg">
+          <!-- AI Agent -->
+          <rect x="10" y="20" width="100" height="50" rx="8" fill="var(--color-bg-alt)" stroke="var(--color-border)" stroke-width="1.5"/>
+          <text x="60" y="42" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">AI Coding</text>
+          <text x="60" y="58" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">Assistant</text>
+
+          <!-- Arrow agent -> straylight -->
+          <line x1="110" y1="45" x2="148" y2="45" stroke="var(--color-primary)" stroke-width="1.5" marker-end="url(#arr-db-p)"/>
+          <text x="129" y="38" text-anchor="middle" font-size="8" fill="var(--color-text-muted)">db_query</text>
+
+          <!-- Straylight box -->
+          <rect x="148" y="10" width="120" height="70" rx="8" fill="var(--color-primary-light)" stroke="var(--color-primary)" stroke-width="2"/>
+          <text x="208" y="35" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-primary)">Database</text>
+          <text x="208" y="50" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-primary)">Manager</text>
+          <text x="208" y="68" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">temp user + query</text>
+
+          <!-- Arrow -> OpenBao -->
+          <line x1="208" y1="80" x2="208" y2="115" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr-db-o)"/>
+          <text x="230" y="102" font-size="8" fill="#d97706">create lease</text>
+
+          <!-- OpenBao box -->
+          <rect x="148" y="115" width="120" height="45" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+          <text x="208" y="138" text-anchor="middle" font-size="10" font-weight="700" fill="#d97706">OpenBao</text>
+          <text x="208" y="153" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">DB Secrets Engine</text>
+
+          <!-- Arrow -> Database -->
+          <line x1="268" y1="138" x2="308" y2="138" stroke="#059669" stroke-width="1.5" marker-end="url(#arr-db-g)"/>
+          <text x="288" y="130" text-anchor="middle" font-size="7" fill="#059669">CREATE USER</text>
+
+          <!-- Database box -->
+          <rect x="308" y="115" width="42" height="45" rx="6" fill="var(--color-bg-alt)" stroke="var(--color-border)" stroke-width="1.5"/>
+          <text x="329" y="138" text-anchor="middle" font-size="8" font-weight="700" fill="var(--color-text)">DB</text>
+          <text x="329" y="152" text-anchor="middle" font-size="7" fill="var(--color-text-secondary)">Postgres</text>
+
+          <!-- Response -->
+          <line x1="148" y1="55" x2="110" y2="55" stroke="#059669" stroke-width="1.5" marker-end="url(#arr-db-g)"/>
+          <text x="129" y="68" text-anchor="middle" font-size="8" fill="#059669">results only</text>
+
+          <!-- Revoke note -->
+          <rect x="10" y="180" width="340" height="60" rx="6" fill="var(--color-bg-alt)" stroke="var(--color-border)"/>
+          <text x="180" y="200" text-anchor="middle" font-size="9" font-weight="700" fill="var(--color-text)">Lease lifecycle</text>
+          <text x="180" y="216" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Temp user created  →  Query runs  →  Lease expires  →  DROP USER</text>
+          <text x="180" y="232" text-anchor="middle" font-size="8" fill="var(--color-success)">No standing database password required in any config file</text>
+
+          <defs>
+            <marker id="arr-db-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-primary)"/>
+            </marker>
+            <marker id="arr-db-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+            </marker>
+            <marker id="arr-db-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Feature 8: Cloud Provider Temporary Credentials -->
+<section class="feature-section feature-section--alt" id="cloud-temp-creds" aria-labelledby="feat-cloud-creds-heading">
+  <div class="container">
+    <div class="feature-section-inner">
+      <div class="feature-detail-diagram" aria-hidden="true">
+        <svg viewBox="0 0 360 260" width="100%" xmlns="http://www.w3.org/2000/svg">
+          <!-- AI Coding Assistant -->
+          <rect x="10" y="20" width="100" height="50" rx="8" fill="var(--color-bg-alt)" stroke="var(--color-border)" stroke-width="1.5"/>
+          <text x="60" y="42" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">AI Coding</text>
+          <text x="60" y="58" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-text)">Assistant</text>
+
+          <!-- Arrow -> Cloud Manager -->
+          <line x1="110" y1="45" x2="148" y2="45" stroke="var(--color-primary)" stroke-width="1.5" marker-end="url(#arr-cl-p)"/>
+          <text x="129" y="38" text-anchor="middle" font-size="7" fill="var(--color-text-muted)">exec aws s3 ls</text>
+
+          <!-- Cloud Manager -->
+          <rect x="148" y="10" width="120" height="70" rx="8" fill="var(--color-primary-light)" stroke="var(--color-primary)" stroke-width="2"/>
+          <text x="208" y="35" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-primary)">Cloud Provider</text>
+          <text x="208" y="50" text-anchor="middle" font-size="10" font-weight="700" fill="var(--color-primary)">Manager</text>
+          <text x="208" y="68" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">ephemeral creds injected</text>
+
+          <!-- Arrow -> AWS STS -->
+          <line x1="268" y1="45" x2="308" y2="45" stroke="#d97706" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arr-cl-o)"/>
+          <text x="288" y="38" text-anchor="middle" font-size="7" fill="#d97706">AssumeRole</text>
+
+          <!-- Cloud provider box -->
+          <rect x="308" y="20" width="42" height="110" rx="6" fill="var(--color-bg-alt)" stroke="var(--color-border)" stroke-width="1.5"/>
+          <text x="329" y="55" text-anchor="middle" font-size="7" font-weight="700" fill="var(--color-text)">AWS</text>
+          <text x="329" y="68" text-anchor="middle" font-size="7" fill="var(--color-text-secondary)">STS</text>
+          <text x="329" y="88" text-anchor="middle" font-size="7" font-weight="700" fill="var(--color-text)">GCP</text>
+          <text x="329" y="101" text-anchor="middle" font-size="7" fill="var(--color-text-secondary)">Token</text>
+          <text x="329" y="118" text-anchor="middle" font-size="7" font-weight="700" fill="var(--color-text)">Azure</text>
+
+          <!-- Response to agent (sanitized) -->
+          <line x1="148" y1="60" x2="110" y2="60" stroke="#059669" stroke-width="1.5" marker-end="url(#arr-cl-g)"/>
+          <text x="129" y="73" text-anchor="middle" font-size="7" fill="#059669">output only</text>
+
+          <!-- Vault stores parent creds -->
+          <rect x="148" y="145" width="120" height="45" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+          <text x="208" y="168" text-anchor="middle" font-size="10" font-weight="700" fill="#d97706">OpenBao</text>
+          <text x="208" y="183" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">parent credentials</text>
+
+          <line x1="208" y1="80" x2="208" y2="144" stroke="#d97706" stroke-width="1.2" stroke-dasharray="3 2" marker-end="url(#arr-cl-o)"/>
+
+          <!-- TTL note -->
+          <rect x="10" y="205" width="340" height="45" rx="6" fill="var(--color-bg-alt)" stroke="var(--color-border)"/>
+          <text x="180" y="223" text-anchor="middle" font-size="8" font-weight="700" fill="var(--color-text)">Ephemeral credential properties</text>
+          <text x="180" y="239" text-anchor="middle" font-size="8" fill="var(--color-text-secondary)">Session-scoped  &bull;  Max 1-hour TTL  &bull;  Scoped to requested service permissions</text>
+
+          <defs>
+            <marker id="arr-cl-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-primary)"/>
+            </marker>
+            <marker id="arr-cl-o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+            </marker>
+            <marker id="arr-cl-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <div class="feature-text">
+        <div class="section-label">Dynamic Secrets</div>
+        <h2 id="feat-cloud-creds-heading">Cloud Provider Temporary Credentials</h2>
+        <p>
+          Configure AWS, GCP, or Azure once. Straylight generates scoped, time-limited
+          credentials for every command. No long-lived access keys in your AI's context.
+        </p>
+        <p>
+          When your AI coding assistant runs a cloud CLI command through <code>straylight_exec</code>,
+          Straylight calls AWS STS AssumeRole, GCP token service, or Azure identity to generate
+          ephemeral credentials. These are injected as environment variables into the subprocess.
+          The AI sees only the command output, never the keys.
+        </p>
+        <ul class="feature-list">
+          <li>AWS: STS AssumeRole generates temporary <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, and <code>AWS_SESSION_TOKEN</code></li>
+          <li>GCP: short-lived access tokens from the token service, no service account JSON files needed</li>
+          <li>Azure: app registration tokens via the Azure identity SDK</li>
+          <li>Parent credentials (IAM key, service account) stored encrypted in vault only</li>
+          <li>Scope templates available: read-only, deploy, specific service permissions</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Feature 9: Project Secret Scanner -->
+<section class="feature-section" id="secret-scanner" aria-labelledby="feat-scanner-heading">
+  <div class="container">
+    <div class="feature-section-inner">
+      <div class="feature-text">
+        <div class="section-label">Prevention</div>
+        <h2 id="feat-scanner-heading">Project Secret Scanner</h2>
+        <p>
+          Scan your project for exposed secrets before your AI reads them. Detects API keys,
+          tokens, private keys, and connection strings across 14 pattern categories.
+        </p>
+        <p>
+          Call the <code>straylight_scan</code> MCP tool to walk your project directory and
+          report files containing secrets. Each finding includes the file path, line number,
+          secret type, and severity. The scanner recommends which files to add to your
+          <code>.claudeignore</code>, <code>.cursorignore</code>, or <code>.rooignore</code>
+          to keep those files out of the AI context window.
+        </p>
+        <ul class="feature-list">
+          <li>14 pattern categories: AWS keys, GitHub PATs, Stripe keys, OpenAI keys, private keys, connection strings, and more</li>
+          <li>Reuses the same regex engine as the output sanitizer &mdash; proven detection patterns</li>
+          <li>Reports findings with redacted snippets so you can confirm without seeing the full secret</li>
+          <li>Generates ready-to-paste ignore rules for Claude Code, Cursor, Windsurf, and Roo</li>
+          <li>Findings logged to the audit trail</li>
+        </ul>
+      </div>
+      <div class="feature-detail-diagram" aria-hidden="true">
+        <div class="terminal">
+          <div class="terminal-header">
+            <span class="terminal-dot terminal-dot--red"></span>
+            <span class="terminal-dot terminal-dot--yellow"></span>
+            <span class="terminal-dot terminal-dot--green"></span>
+            <span class="terminal-title">straylight_scan output</span>
+          </div>
+          <div class="terminal-body" style="font-size:0.75rem">
+            <div class="terminal-line terminal-output">Scanning /home/user/myproject ...</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line" style="color:#fca5a5">CRITICAL  .env:3</div>
+            <div class="terminal-line terminal-output">&nbsp; Type: AWS Access Key (AKIA...)</div>
+            <div class="terminal-line terminal-output">&nbsp; Preview: AKIA[REDACTED]</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line" style="color:#fbbf24">HIGH  docker-compose.yml:18</div>
+            <div class="terminal-line terminal-output">&nbsp; Type: Connection string (postgres://)</div>
+            <div class="terminal-line terminal-output">&nbsp; Preview: postgres://admin:[REDACTED]@...</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line" style="color:#fbbf24">HIGH  config/settings.py:42</div>
+            <div class="terminal-line terminal-output">&nbsp; Type: Generic API key pattern</div>
+            <div class="terminal-line terminal-output">&nbsp; Preview: SECRET_KEY = "[REDACTED]"</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line terminal-success">Recommended .claudeignore additions:</div>
+            <div class="terminal-line" style="color:#86efac">.env</div>
+            <div class="terminal-line" style="color:#86efac">docker-compose.yml</div>
+            <div class="terminal-line" style="color:#86efac">config/settings.py</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Feature 10: Sensitive File Firewall -->
+<section class="feature-section feature-section--alt" id="file-firewall" aria-labelledby="feat-firewall-heading">
+  <div class="container">
+    <div class="feature-section-inner">
+      <div class="feature-detail-diagram" aria-hidden="true">
+        <div class="terminal">
+          <div class="terminal-header">
+            <span class="terminal-dot terminal-dot--red"></span>
+            <span class="terminal-dot terminal-dot--yellow"></span>
+            <span class="terminal-dot terminal-dot--green"></span>
+            <span class="terminal-title">straylight_read_file — docker-compose.yml</span>
+          </div>
+          <div class="terminal-body" style="font-size:0.75rem">
+            <div class="terminal-line" style="color:#a5b4fc">// Raw file content (BLOCKED from AI)</div>
+            <div class="terminal-line" style="color:#f472b6">services:</div>
+            <div class="terminal-line" style="color:#f472b6">&nbsp; db:</div>
+            <div class="terminal-line" style="color:#f472b6">&nbsp;&nbsp; environment:</div>
+            <div class="terminal-line" style="color:#fca5a5">&nbsp;&nbsp;&nbsp; POSTGRES_PASSWORD: hunter2</div>
+            <div class="terminal-line" style="color:#fca5a5">&nbsp;&nbsp;&nbsp; DATABASE_URL: postgres://admin:hunter2@db/app</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line terminal-success">// straylight_read_file returns (SAFE for AI)</div>
+            <div class="terminal-line terminal-output">services:</div>
+            <div class="terminal-line terminal-output">&nbsp; db:</div>
+            <div class="terminal-line terminal-output">&nbsp;&nbsp; environment:</div>
+            <div class="terminal-line terminal-success">&nbsp;&nbsp;&nbsp; POSTGRES_PASSWORD: [STRAYLIGHT:db]</div>
+            <div class="terminal-line terminal-success">&nbsp;&nbsp;&nbsp; DATABASE_URL: [STRAYLIGHT:db]</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line" style="color:#fbbf24"># .env files: blocked entirely</div>
+            <div class="terminal-line" style="color:#fbbf24"># config files: structure preserved, secrets masked</div>
+          </div>
+        </div>
+      </div>
+      <div class="feature-text">
+        <div class="section-label">Defense Layer 6</div>
+        <h2 id="feat-firewall-heading">Sensitive File Firewall</h2>
+        <p>
+          Read files with secrets automatically redacted. Blocked files return guidance to
+          use the vault instead. Config files preserve structure with secrets masked.
+        </p>
+        <p>
+          The <code>straylight_read_file</code> MCP tool is the secure alternative to reading
+          files directly. It intercepts the file content, applies block and redact rules, and
+          returns a clean version to the AI coding assistant. Files like <code>.env</code> are
+          blocked entirely. Files like <code>docker-compose.yml</code> and
+          <code>settings.py</code> are served with secrets replaced by
+          <code>[STRAYLIGHT:service-name]</code> placeholders.
+        </p>
+        <ul class="feature-list">
+          <li>Block patterns: <code>.env</code>, <code>.env.*</code>, <code>*credentials*</code>, <code>*secret*</code>, SSH private keys</li>
+          <li>Redact patterns: config files with recognized secret variable names</li>
+          <li>Config files preserve YAML/TOML/INI structure so the AI can reason about them</li>
+          <li>Blocked files return a vault-redirect message guiding the AI to use <code>straylight_api_call</code> instead</li>
+          <li>Works across all AI coding assistants, not only Claude Code hooks</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Feature 11: Credential Audit Trail -->
+<section class="feature-section" id="audit-trail" aria-labelledby="feat-audit-heading">
+  <div class="container">
+    <div class="feature-section-inner">
+      <div class="feature-text">
+        <div class="section-label">Observability</div>
+        <h2 id="feat-audit-heading">Credential Audit Trail</h2>
+        <p>
+          Every credential access is logged. See which services were used, when, and by
+          which tool. JSON Lines format for easy integration.
+        </p>
+        <p>
+          The audit logger records every <code>straylight_api_call</code>,
+          <code>straylight_exec</code>, <code>straylight_db_query</code>, and
+          <code>straylight_read_file</code> invocation with a timestamp, service name, tool
+          name, and request summary &mdash; with credentials redacted. Logs are written to
+          an append-only JSON Lines file in <code>/data/audit/</code> and are viewable from
+          the dashboard.
+        </p>
+        <ul class="feature-list">
+          <li>Append-only JSON Lines format at <code>/data/audit/access.jsonl</code></li>
+          <li>File rotation at 100&thinsp;MB, configurable retention</li>
+          <li>In-memory ring buffer for fast dashboard queries without scanning the log file</li>
+          <li>Dashboard audit page: filter by service, tool, and time range</li>
+          <li>When a leak or breach occurs, you can trace exactly which session triggered which credential access</li>
+        </ul>
+      </div>
+      <div class="feature-detail-diagram" aria-hidden="true">
+        <div class="terminal">
+          <div class="terminal-header">
+            <span class="terminal-dot terminal-dot--red"></span>
+            <span class="terminal-dot terminal-dot--yellow"></span>
+            <span class="terminal-dot terminal-dot--green"></span>
+            <span class="terminal-title">/data/audit/access.jsonl</span>
+          </div>
+          <div class="terminal-body" style="font-size:0.7rem">
+            <div class="terminal-line terminal-output">{"ts":"2026-03-26T14:22:01Z","tool":"straylight_api_call",</div>
+            <div class="terminal-line terminal-output">&nbsp;"service":"github","method":"GET","path":"/user/repos",</div>
+            <div class="terminal-line terminal-success">&nbsp;"credential_used":true,"secret_in_response":false}</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line terminal-output">{"ts":"2026-03-26T14:22:14Z","tool":"straylight_exec",</div>
+            <div class="terminal-line terminal-output">&nbsp;"service":"aws","command":"aws s3 ls s3://my-bucket",</div>
+            <div class="terminal-line terminal-success">&nbsp;"credential_used":true,"temp_cred_ttl_s":900}</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line terminal-output">{"ts":"2026-03-26T14:23:05Z","tool":"straylight_db_query",</div>
+            <div class="terminal-line terminal-output">&nbsp;"service":"postgres-prod","lease_id":"db/creds/readonly/abc123",</div>
+            <div class="terminal-line terminal-success">&nbsp;"lease_ttl_s":600,"rows_returned":12}</div>
+            <div class="terminal-line">&nbsp;</div>
+            <div class="terminal-line" style="color:#fbbf24">{"ts":"2026-03-26T14:24:10Z","tool":"straylight_read_file",</div>
+            <div class="terminal-line" style="color:#fbbf24">&nbsp;"path":"docker-compose.yml","action":"redacted",</div>
+            <div class="terminal-line" style="color:#fbbf24">&nbsp;"patterns_matched":2}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- CTA -->
 <section class="cta-section" aria-labelledby="cta-heading">
   <div class="container">
     <div class="cta-card">
       <div class="cta-content">
         <h2 id="cta-heading">Get started in 2 minutes</h2>
-        <p>One command installs and configures everything. Your AI agent will be making secure API calls before your next coffee.</p>
+        <p>One command installs and configures everything. Your AI coding assistant will be making secure API calls before your next coffee.</p>
         <div class="cta-actions">
           <a href="{{ site.baseurl }}/docs/quickstart/" class="btn btn-primary btn-lg">Read the Quickstart</a>
           <a href="{{ site.github_url }}" class="btn btn-outline-white btn-lg" target="_blank" rel="noopener noreferrer">Star on GitHub</a>

@@ -139,15 +139,16 @@ func TestInitializeVault_NewVault(t *testing.T) {
 
 	// Track which endpoints were called
 	var (
-		initCalled     atomic.Bool
-		unsealCalled   atomic.Bool
-		kvMountCalled  atomic.Bool
-		policyCreated  atomic.Bool
-		authEnabled    atomic.Bool
-		roleCreated    atomic.Bool
-		roleIDCalled   atomic.Bool
-		secretIDCalled atomic.Bool
-		loginCalled    atomic.Bool
+		initCalled       atomic.Bool
+		unsealCalled     atomic.Bool
+		kvMountCalled    atomic.Bool
+		dbMountCalled    atomic.Bool
+		policyCreated    atomic.Bool
+		authEnabled      atomic.Bool
+		roleCreated      atomic.Bool
+		roleIDCalled     atomic.Bool
+		secretIDCalled   atomic.Bool
+		loginCalled      atomic.Bool
 	)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +176,10 @@ func TestInitializeVault_NewVault(t *testing.T) {
 
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/sys/mounts/secret":
 			kvMountCalled.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/sys/mounts/database":
+			dbMountCalled.Store(true)
 			w.WriteHeader(http.StatusNoContent)
 
 		case r.Method == http.MethodPut && r.URL.Path == "/v1/sys/policies/acl/straylight":
@@ -234,15 +239,16 @@ func TestInitializeVault_NewVault(t *testing.T) {
 
 	// Verify all steps in the init sequence were called
 	for name, called := range map[string]*atomic.Bool{
-		"PUT /v1/sys/init":                            &initCalled,
-		"PUT /v1/sys/unseal":                          &unsealCalled,
-		"POST /v1/sys/mounts/secret":                  &kvMountCalled,
-		"PUT /v1/sys/policies/acl/straylight":         &policyCreated,
-		"POST /v1/sys/auth/approle":                   &authEnabled,
-		"POST /v1/auth/approle/role/straylight":       &roleCreated,
-		"GET /v1/auth/approle/role/straylight/role-id": &roleIDCalled,
+		"PUT /v1/sys/init":                                &initCalled,
+		"PUT /v1/sys/unseal":                              &unsealCalled,
+		"POST /v1/sys/mounts/secret":                     &kvMountCalled,
+		"POST /v1/sys/mounts/database":                   &dbMountCalled,
+		"PUT /v1/sys/policies/acl/straylight":            &policyCreated,
+		"POST /v1/sys/auth/approle":                      &authEnabled,
+		"POST /v1/auth/approle/role/straylight":          &roleCreated,
+		"GET /v1/auth/approle/role/straylight/role-id":   &roleIDCalled,
 		"POST /v1/auth/approle/role/straylight/secret-id": &secretIDCalled,
-		"POST /v1/auth/approle/login":                 &loginCalled,
+		"POST /v1/auth/approle/login":                    &loginCalled,
 	} {
 		if !called.Load() {
 			t.Errorf("expected %s to be called during initialization", name)

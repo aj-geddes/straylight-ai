@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: "FAQ"
-description: "Frequently asked questions about Straylight-AI: security guarantees, AI agent credential safety, compatibility with Claude Code and Cursor, open source license, and self-hosted setup."
+description: "Frequently asked questions about Straylight-AI: security guarantees, AI coding assistant credential safety, database credentials, secret scanning, file firewall, compatibility with Claude Code and Cursor, open source license, and self-hosted setup."
 permalink: /docs/faq/
 prev_page:
   title: "User Guide"
@@ -20,6 +20,26 @@ json_ld:
       "acceptedAnswer":
         "@type": "Answer"
         "text": "With Straylight-AI, yes. The agent never actually has access to your keys — it has access to the capability your keys provide. Straylight injects credentials at the transport layer, so the agent makes real API calls without ever seeing the credential."
+    - "@type": "Question"
+      "name": "Can the AI access my database directly?"
+      "acceptedAnswer":
+        "@type": "Answer"
+        "text": "No. Straylight creates temporary database users and proxies queries through the straylight_db_query tool. The AI sends SQL and gets results back, but never sees a connection string or password. Temporary users auto-expire."
+    - "@type": "Question"
+      "name": "Do I need to configure .claudeignore separately?"
+      "acceptedAnswer":
+        "@type": "Answer"
+        "text": "Not necessarily. Straylight's file firewall (straylight_read_file) automatically redacts secrets from files. For maximum protection, use both: the firewall redacts on read, and .claudeignore prevents access entirely."
+    - "@type": "Question"
+      "name": "What secrets can the scanner detect?"
+      "acceptedAnswer":
+        "@type": "Answer"
+        "text": "AWS access keys, GitHub PATs, Stripe API keys, OpenAI keys, private keys, .env variables, connection strings, Slack webhooks, SendGrid keys, Twilio tokens, and more. 14 pattern categories in total."
+    - "@type": "Question"
+      "name": "Are temporary database credentials safe?"
+      "acceptedAnswer":
+        "@type": "Answer"
+        "text": "Yes. They have limited permissions (SELECT only by default), short TTLs (15 minutes), and are automatically revoked when they expire. Even if the AI's context were compromised, the credentials would be expired."
 ---
 
 ## Security
@@ -76,6 +96,64 @@ The practical risk for individual developers is low. For high-security environme
 No. Straylight-AI is entirely self-hosted. It has no cloud component, no telemetry, no analytics, and no callback URLs. The Docker image is built from public source code on GitHub. You can audit every line.
 
 When you make an `api_call` through Straylight, the request goes directly from the Docker container to the external API (e.g., `api.github.com`). Nothing passes through any Straylight-controlled server.
+
+---
+
+### Can the AI access my database directly?
+
+No. Straylight proxies all database access through the `straylight_db_query` MCP tool.
+
+When the AI coding assistant needs to query a database, it calls `straylight_db_query` with a service name and a SQL statement. Straylight provisions a temporary database user via OpenBao's database secrets engine, runs the query through an internal connection, and returns the results. The AI receives the query results — never the connection string, admin password, or temporary credentials.
+
+Temporary users are created with `SELECT` permissions only by default and are automatically revoked when their TTL expires (15 minutes). Even if someone obtained the AI's context window, there would be no usable database credential in it.
+
+---
+
+### Do I need to configure .claudeignore separately?
+
+Not necessarily, but using both provides the strongest protection.
+
+Straylight's file firewall (`straylight_read_file`) automatically redacts secret values from files before returning them to the AI. The file structure is preserved — the AI can see field names and configuration layout — but actual secret values are replaced with `[STRAYLIGHT:pattern-name]` placeholders.
+
+`.claudeignore` (and equivalent files for other AI coding assistants) prevents the AI from accessing certain files at all. However, these ignore files have been demonstrated to be bypassable in some circumstances.
+
+Using both layers: `straylight_read_file` redacts on read, and `.claudeignore` prevents direct access. The `straylight_scan` tool can generate ignore file content from its scan results, so you don't need to write the rules manually.
+
+---
+
+### What secrets can the scanner detect?
+
+The scanner applies 14 pattern categories:
+
+- AWS access keys (`AKIA...`)
+- GitHub Personal Access Tokens (`ghp_...`, `github_pat_...`)
+- Stripe API keys (`sk_live_...`, `sk_test_...`)
+- OpenAI API keys (`sk-proj-...`, `sk-...`)
+- Private keys (PEM-encoded)
+- `.env` variable assignments
+- Database connection strings (`postgres://`, `mysql://`, `mongodb+srv://`)
+- Generic Bearer tokens
+- Generic API key patterns
+- Slack webhooks
+- SendGrid keys (`SG....`)
+- Twilio tokens
+- Basic auth in URLs
+- Private key files (by filename: `.pem`, `id_rsa`, `id_ed25519`)
+
+You can add custom patterns in `config.yaml` under the `scanner.custom_patterns` key.
+
+---
+
+### Are temporary database credentials safe?
+
+Yes, for several compounding reasons:
+
+- **Limited permissions**: Temporary users are created with `SELECT` permissions only by default. They cannot modify, insert, or delete data.
+- **Short TTL**: Credentials expire after 15 minutes. There is no way to extend this beyond the configured `max_ttl` (default: 1 hour).
+- **Automatic revocation**: When the TTL expires, OpenBao automatically runs `DROP ROLE` or `DROP USER`. The credential ceases to exist at the database level — it cannot be used even if someone has the value.
+- **Never in context**: The credential values are never returned to the AI coding assistant. They exist only inside the Straylight container for the duration of the query execution.
+
+Even in a worst-case scenario where an AI session was compromised via prompt injection, the attacker would have no usable database credential. The temporary user would already be expired by the time they could act on it.
 
 ---
 

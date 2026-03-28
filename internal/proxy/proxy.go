@@ -15,11 +15,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
 
+	"github.com/straylight-ai/straylight/internal/audit"
 	"github.com/straylight-ai/straylight/internal/services"
 )
 
@@ -88,6 +90,7 @@ type Proxy struct {
 	sanitizer Sanitizer
 	client    *http.Client
 	injectors *InjectorRegistry
+	auditLog  audit.Emitter
 
 	ttl        time.Duration
 	cache      sync.Map // key: service name (string) → *cachedCredential (legacy)
@@ -130,6 +133,15 @@ func (p *Proxy) SetHTTPClient(c *http.Client) {
 	p.client = c
 }
 
+// SetAudit registers an audit emitter on the proxy. When set, HandleAPICall
+// emits a credential_accessed event on every completed API call. The event
+// contains the service name, HTTP method, path, and response status code.
+// Credential values are never included in audit event details.
+// SetAudit is safe to call before the proxy handles any requests.
+func (p *Proxy) SetAudit(a audit.Emitter) {
+	p.auditLog = a
+}
+
 // HandleAPICall processes one straylight_api_call invocation.
 // It resolves the service, fetches (and caches) the credential, builds an
 // upstream HTTP request, forwards it, and returns the sanitized response.
@@ -163,13 +175,31 @@ func (p *Proxy) HandleAPICall(ctx context.Context, req APICallRequest) (*APICall
 		return nil, err
 	}
 
+	start := time.Now()
 	resp, err := p.client.Do(upstreamReq)
 	if err != nil {
 		return nil, fmt.Errorf("upstream service unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 
-	return p.buildResponse(resp)
+	result, buildErr := p.buildResponse(resp)
+
+	if p.auditLog != nil {
+		details := map[string]string{
+			"method":      req.Method,
+			"path":        req.Path,
+			"status":      strconv.Itoa(resp.StatusCode),
+			"duration_ms": strconv.FormatInt(time.Since(start).Milliseconds(), 10),
+		}
+		p.auditLog.Emit(audit.Event{
+			Type:    audit.EventCredentialAccessed,
+			Service: req.Service,
+			Tool:    "straylight_api_call",
+			Details: details,
+		})
+	}
+
+	return result, buildErr
 }
 
 // buildUpstreamRequestWithAuth builds the outbound request using the injector

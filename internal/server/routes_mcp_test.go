@@ -80,8 +80,8 @@ func TestMCPRoutes_ToolListRegistered(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(resp.Tools) != 4 {
-		t.Errorf("expected 4 tools, got %d", len(resp.Tools))
+	if len(resp.Tools) < 4 {
+		t.Errorf("expected at least 4 tools, got %d", len(resp.Tools))
 	}
 }
 

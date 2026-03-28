@@ -20,6 +20,8 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 var validTypes = map[string]bool{
 	"http_proxy": true,
 	"oauth":      true,
+	"database":   true,
+	"cloud":      true,
 }
 
 // validInject is the set of accepted inject modes for WP-1.1.
@@ -534,7 +536,12 @@ func validateService(svc Service) error {
 
 	// Validate type.
 	if !validTypes[svc.Type] {
-		return fmt.Errorf("services: invalid type %q: must be http_proxy or oauth", svc.Type)
+		return fmt.Errorf("services: invalid type %q: must be http_proxy, oauth, database, or cloud", svc.Type)
+	}
+
+	// Database and cloud services do not use a target URL — skip URL validation.
+	if svc.Type == "database" || svc.Type == "cloud" {
+		return nil
 	}
 
 	// Validate target: must be a valid URL with https scheme.

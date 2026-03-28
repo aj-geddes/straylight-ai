@@ -179,6 +179,86 @@ func TestPostToolUse_PreservesNonStringFields(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Connection string redaction in output (Phase 1c additions)
+// ---------------------------------------------------------------------------
+
+func TestPostToolUse_RedactsPostgresConnectionStringInStdout(t *testing.T) {
+	processor := newPassthroughProcessor()
+	input := PostToolUseOutput{
+		ToolName: "Bash",
+		ToolOutput: map[string]interface{}{
+			"stdout": "Connected to: postgresql://admin:secretpass@db.example.com:5432/mydb\n",
+			"stderr": "",
+		},
+	}
+	result := processor.Process(input)
+	stdout, ok := result.ToolOutput["stdout"].(string)
+	if !ok {
+		t.Fatal("stdout should be a string")
+	}
+	if containsStr(stdout, "secretpass") {
+		t.Error("postgres connection string password should be redacted from stdout")
+	}
+}
+
+func TestPostToolUse_RedactsMysqlConnectionStringInStdout(t *testing.T) {
+	processor := newPassthroughProcessor()
+	input := PostToolUseOutput{
+		ToolName: "Bash",
+		ToolOutput: map[string]interface{}{
+			"stdout": "DSN: mysql://dbuser:dbsecret@localhost/app\n",
+			"stderr": "",
+		},
+	}
+	result := processor.Process(input)
+	stdout, ok := result.ToolOutput["stdout"].(string)
+	if !ok {
+		t.Fatal("stdout should be a string")
+	}
+	if containsStr(stdout, "dbsecret") {
+		t.Error("mysql connection string password should be redacted from stdout")
+	}
+}
+
+func TestPostToolUse_RedactsMongodbConnectionStringInStdout(t *testing.T) {
+	processor := newPassthroughProcessor()
+	input := PostToolUseOutput{
+		ToolName: "Bash",
+		ToolOutput: map[string]interface{}{
+			"stdout": "URI: mongodb://mongouser:mongopass@mongo.example.com:27017/db\n",
+			"stderr": "",
+		},
+	}
+	result := processor.Process(input)
+	stdout, ok := result.ToolOutput["stdout"].(string)
+	if !ok {
+		t.Fatal("stdout should be a string")
+	}
+	if containsStr(stdout, "mongopass") {
+		t.Error("mongodb connection string password should be redacted from stdout")
+	}
+}
+
+func TestPostToolUse_RedactsConnectionStringInStderr(t *testing.T) {
+	processor := newPassthroughProcessor()
+	input := PostToolUseOutput{
+		ToolName: "Bash",
+		ToolOutput: map[string]interface{}{
+			"stdout": "",
+			"stderr": "error connecting to redis://redisuser:redispass@cache.example.com:6379\n",
+		},
+	}
+	result := processor.Process(input)
+	stderr, ok := result.ToolOutput["stderr"].(string)
+	if !ok {
+		t.Fatal("stderr should be a string")
+	}
+	if containsStr(stderr, "redispass") {
+		t.Error("redis connection string password should be redacted from stderr")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Tool name is preserved
 // ---------------------------------------------------------------------------
 

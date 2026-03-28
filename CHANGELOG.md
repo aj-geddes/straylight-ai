@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.5.0] - 2026-03-28
+
+### Added
+- Dynamic database credentials: temporary PostgreSQL, MySQL, and Redis users via OpenBao database secrets engine
+- Cloud provider temporary credentials: AWS STS, GCP, and Azure ephemeral credential injection
+- Project secret scanner: detect exposed secrets across 14 pattern categories via `straylight_scan` MCP tool
+- Sensitive file firewall: redacted file reading via `straylight_read_file` MCP tool
+- Credential audit trail: JSON Lines append-only logging of all credential access
+- New MCP tools: `straylight_db_query`, `straylight_scan`, `straylight_read_file`
+- Lease-aware credential cache for dynamic secrets with automatic renewal and revocation
+- Enhanced Claude Code hooks: additional sensitive file patterns, connection string redaction
+- Database and cloud service templates (PostgreSQL, MySQL, Redis, AWS, GCP, Azure)
+
+### Fixed
+- Vault ACL policy: `*` wildcard only matched one path segment, blocking credential writes to nested `services/{name}/credential` paths; added explicit `+` glob rules for sub-paths
+- npm setup: replaced bind mount with named Docker volume (`straylight-ai-data`) so container UID 10001 can write to `/data` without host-side `mkdir`/`chown`
+
+### Security
+- Upgraded Go from 1.25.0 to 1.25.8 — fixes 14 stdlib CVEs across `net/url`, `crypto/tls`, `crypto/x509`, `net/http`, `encoding/asn1`, `encoding/pem`, and `os`
+- Upgraded OpenBao from 2.5.1 to 2.5.2 — fixes CVE-2026-33757 (9.6 critical, session fixation) and CVE-2026-33758 (9.4 critical, XSS), plus 4 high-severity CVEs
+- Upgraded Alpine base image from 3.21 to 3.23
+- Upgraded `filippo.io/edwards25519` from v1.1.0 to v1.2.0 (CVE-2026-26958)
+- Pinned Go builder image to `golang:1.25.8-alpine`
+- Fixed npm dependency vulnerabilities in `brace-expansion` and `picomatch`
+
 ## [0.1.0] - 2026-03-22
 
 ### Added

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/services"
 	"github.com/straylight-ai/straylight/internal/web"
 )
@@ -23,6 +24,12 @@ func registerRoutes(s *Server) {
 	s.mux.HandleFunc("/api/v1/stats", s.handleMethodNotAllowed)
 
 	if s.cfg.Registry != nil {
+		// Cloud provider temporary credential endpoints (Phase 2b).
+		s.mux.HandleFunc("GET /api/v1/cloud", s.handleListCloudServices)
+		s.mux.HandleFunc("POST /api/v1/cloud/{provider}", s.handleCreateCloudService)
+		s.mux.HandleFunc("/api/v1/cloud/", s.handleMethodNotAllowed)
+		s.mux.HandleFunc("/api/v1/cloud", s.handleMethodNotAllowed)
+
 		// Service management endpoints (WP-1.1).
 		s.mux.HandleFunc("GET /api/v1/services", s.handleListServices)
 		s.mux.HandleFunc("POST /api/v1/services", s.handleCreateService)
@@ -43,9 +50,20 @@ func registerRoutes(s *Server) {
 		s.mux.HandleFunc("/api/v1/templates", s.handleMethodNotAllowed)
 	} else {
 		// Stub when no registry is configured (pre-WP-1.1 state).
+		s.mux.HandleFunc("/api/v1/cloud/", s.handleNotImplemented)
+		s.mux.HandleFunc("/api/v1/cloud", s.handleNotImplemented)
 		s.mux.HandleFunc("/api/v1/services/", s.handleNotImplemented)
 		s.mux.HandleFunc("/api/v1/services", s.handleNotImplemented)
 		s.mux.HandleFunc("/api/v1/templates", s.handleNotImplemented)
+	}
+
+	// Audit log endpoints (ADR-014).
+	if s.cfg.AuditLogger != nil {
+		s.mux.HandleFunc("GET /api/v1/audit/events", s.handleAuditEvents)
+		s.mux.HandleFunc("GET /api/v1/audit/stats", s.handleAuditStats)
+		s.mux.HandleFunc("/api/v1/audit/", s.handleMethodNotAllowed)
+	} else {
+		s.mux.HandleFunc("/api/v1/audit/", s.handleNotImplemented)
 	}
 
 	// MCP tool forwarding endpoints (WP-1.4).
@@ -73,6 +91,18 @@ func registerRoutes(s *Server) {
 		s.mux.HandleFunc("/api/v1/oauth/", s.handleMethodNotAllowed)
 	} else {
 		s.mux.HandleFunc("/api/v1/oauth/", s.handleNotImplemented)
+	}
+
+	// Database management endpoints (ADR-010).
+	if s.cfg.DBManager != nil {
+		s.mux.HandleFunc("GET /api/v1/databases", s.handleListDatabases)
+		s.mux.HandleFunc("POST /api/v1/databases/{name}", s.handleConfigureDatabase)
+		s.mux.HandleFunc("DELETE /api/v1/databases/{name}", s.handleRemoveDatabase)
+		s.mux.HandleFunc("/api/v1/databases/", s.handleMethodNotAllowed)
+		s.mux.HandleFunc("/api/v1/databases", s.handleMethodNotAllowed)
+	} else {
+		s.mux.HandleFunc("/api/v1/databases/", s.handleNotImplemented)
+		s.mux.HandleFunc("/api/v1/databases", s.handleNotImplemented)
 	}
 
 	// Web UI — serve the embedded React SPA with SPA fallback routing.
@@ -553,6 +583,343 @@ func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, tmpl)
+}
+
+// ---------------------------------------------------------------------------
+// Cloud provider temporary credential endpoints (Phase 2b)
+// ---------------------------------------------------------------------------
+
+// validCloudProviders is the set of accepted cloud provider names.
+var validCloudProviders = map[string]bool{
+	"aws":   true,
+	"gcp":   true,
+	"azure": true,
+}
+
+// createAWSCloudRequest is the JSON body for POST /api/v1/cloud/aws.
+type createAWSCloudRequest struct {
+	Name        string            `json:"name"`
+	RoleARN     string            `json:"role_arn"`
+	Region      string            `json:"region"`
+	Credentials map[string]string `json:"credentials"`
+}
+
+// createGCPCloudRequest is the JSON body for POST /api/v1/cloud/gcp.
+type createGCPCloudRequest struct {
+	Name        string            `json:"name"`
+	ProjectID   string            `json:"project_id"`
+	Credentials map[string]string `json:"credentials"`
+}
+
+// createAzureCloudRequest is the JSON body for POST /api/v1/cloud/azure.
+type createAzureCloudRequest struct {
+	Name        string            `json:"name"`
+	Credentials map[string]string `json:"credentials"`
+}
+
+// handleListCloudServices responds to GET /api/v1/cloud.
+// Returns all services in the registry that have type=cloud.
+func (s *Server) handleListCloudServices(w http.ResponseWriter, r *http.Request) {
+	all := s.cfg.Registry.List()
+	cloud := make([]services.Service, 0)
+	for _, svc := range all {
+		if svc.Type == "cloud" {
+			cloud = append(cloud, svc)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"services": cloud})
+}
+
+// handleCreateCloudService responds to POST /api/v1/cloud/{provider}.
+// Validates the provider, validates required fields per provider, then creates
+// a type=cloud service in the registry via CreateWithAuth.
+func (s *Server) handleCreateCloudService(w http.ResponseWriter, r *http.Request) {
+	provider := r.PathValue("provider")
+	if !validCloudProviders[provider] {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed,
+			fmt.Sprintf("invalid cloud provider %q: must be one of aws, gcp, azure", provider))
+		return
+	}
+
+	switch provider {
+	case "aws":
+		s.handleCreateAWSCloudService(w, r)
+	case "gcp":
+		s.handleCreateGCPCloudService(w, r)
+	case "azure":
+		s.handleCreateAzureCloudService(w, r)
+	}
+}
+
+// handleCreateAWSCloudService processes POST /api/v1/cloud/aws.
+func (s *Server) handleCreateAWSCloudService(w http.ResponseWriter, r *http.Request) {
+	var req createAWSCloudRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Name == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "name is required")
+		return
+	}
+	if req.RoleARN == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "role_arn is required")
+		return
+	}
+	if len(req.Credentials) == 0 {
+		WriteError(w, http.StatusBadRequest, ErrCodeCredentialMissing, "credentials are required")
+		return
+	}
+	if req.Credentials["access_key_id"] == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "credentials.access_key_id is required")
+		return
+	}
+	if req.Credentials["secret_access_key"] == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "credentials.secret_access_key is required")
+		return
+	}
+
+	region := req.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	creds := map[string]string{
+		"access_key_id":     req.Credentials["access_key_id"],
+		"secret_access_key": req.Credentials["secret_access_key"],
+		"role_arn":          req.RoleARN,
+		"region":            region,
+	}
+
+	svc := services.Service{
+		Name: req.Name,
+		Type: "cloud",
+	}
+
+	if err := s.cfg.Registry.CreateWithAuth(svc, "aws", creds); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			WriteError(w, http.StatusConflict, ErrCodeServiceExists, err.Error())
+		} else {
+			WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, err.Error())
+		}
+		return
+	}
+
+	created, err := s.cfg.Registry.Get(req.Name)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to retrieve created service")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// handleCreateGCPCloudService processes POST /api/v1/cloud/gcp.
+func (s *Server) handleCreateGCPCloudService(w http.ResponseWriter, r *http.Request) {
+	var req createGCPCloudRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Name == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "name is required")
+		return
+	}
+	if req.ProjectID == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "project_id is required")
+		return
+	}
+	if len(req.Credentials) == 0 {
+		WriteError(w, http.StatusBadRequest, ErrCodeCredentialMissing, "credentials are required")
+		return
+	}
+	if req.Credentials["service_account_json"] == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "credentials.service_account_json is required")
+		return
+	}
+
+	creds := map[string]string{
+		"service_account_json": req.Credentials["service_account_json"],
+		"project_id":           req.ProjectID,
+	}
+
+	svc := services.Service{
+		Name: req.Name,
+		Type: "cloud",
+	}
+
+	if err := s.cfg.Registry.CreateWithAuth(svc, "gcp", creds); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			WriteError(w, http.StatusConflict, ErrCodeServiceExists, err.Error())
+		} else {
+			WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, err.Error())
+		}
+		return
+	}
+
+	created, err := s.cfg.Registry.Get(req.Name)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to retrieve created service")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// handleCreateAzureCloudService processes POST /api/v1/cloud/azure.
+func (s *Server) handleCreateAzureCloudService(w http.ResponseWriter, r *http.Request) {
+	var req createAzureCloudRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Name == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "name is required")
+		return
+	}
+	if len(req.Credentials) == 0 {
+		WriteError(w, http.StatusBadRequest, ErrCodeCredentialMissing, "credentials are required")
+		return
+	}
+	if req.Credentials["tenant_id"] == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "credentials.tenant_id is required")
+		return
+	}
+	if req.Credentials["client_id"] == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "credentials.client_id is required")
+		return
+	}
+	if req.Credentials["client_secret"] == "" {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "credentials.client_secret is required")
+		return
+	}
+
+	creds := map[string]string{
+		"tenant_id":     req.Credentials["tenant_id"],
+		"client_id":     req.Credentials["client_id"],
+		"client_secret": req.Credentials["client_secret"],
+	}
+
+	svc := services.Service{
+		Name: req.Name,
+		Type: "cloud",
+	}
+
+	if err := s.cfg.Registry.CreateWithAuth(svc, "azure", creds); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			WriteError(w, http.StatusConflict, ErrCodeServiceExists, err.Error())
+		} else {
+			WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, err.Error())
+		}
+		return
+	}
+
+	created, err := s.cfg.Registry.Get(req.Name)
+	if err != nil {
+		WriteError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to retrieve created service")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+// ---------------------------------------------------------------------------
+// Database management endpoints (ADR-010)
+// ---------------------------------------------------------------------------
+
+// configureDatabaseRequest is the JSON body for POST /api/v1/databases/{name}.
+type configureDatabaseRequest struct {
+	Engine        string `json:"engine"`
+	Host          string `json:"host"`
+	Port          int    `json:"port"`
+	Database      string `json:"database"`
+	SSLMode       string `json:"ssl_mode"`
+	AdminUser     string `json:"admin_user"`
+	AdminPassword string `json:"admin_password"`
+	DefaultTTL    string `json:"default_ttl"`
+	MaxTTL        string `json:"max_ttl"`
+}
+
+// handleListDatabases responds to GET /api/v1/databases.
+// Returns the list of configured database service names.
+func (s *Server) handleListDatabases(w http.ResponseWriter, r *http.Request) {
+	names := s.cfg.DBManager.ListDatabases()
+	result := make([]map[string]interface{}, 0, len(names))
+	for _, name := range names {
+		cfg, ok := s.cfg.DBManager.GetDatabaseConfig(name)
+		if !ok {
+			continue
+		}
+		result = append(result, map[string]interface{}{
+			"name":   name,
+			"engine": cfg.Engine,
+			"host":   cfg.Host,
+			"port":   cfg.Port,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"databases": result})
+}
+
+// handleConfigureDatabase responds to POST /api/v1/databases/{name}.
+// Registers a new database with OpenBao's database secrets engine.
+func (s *Server) handleConfigureDatabase(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	var req configureDatabaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, "invalid request body: "+err.Error())
+		return
+	}
+
+	cfg := database.DatabaseConfig{
+		Engine:        req.Engine,
+		Host:          req.Host,
+		Port:          req.Port,
+		Database:      req.Database,
+		SSLMode:       req.SSLMode,
+		AdminUser:     req.AdminUser,
+		AdminPassword: req.AdminPassword,
+		DefaultTTL:    req.DefaultTTL,
+		MaxTTL:        req.MaxTTL,
+	}
+
+	if err := s.cfg.DBManager.ConfigureDatabase(name, cfg); err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			WriteError(w, http.StatusConflict, ErrCodeServiceExists, err.Error())
+		} else {
+			WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed, err.Error())
+		}
+		return
+	}
+
+	stored, ok := s.cfg.DBManager.GetDatabaseConfig(name)
+	if !ok {
+		WriteError(w, http.StatusInternalServerError, ErrCodeInternalError, "failed to retrieve configured database")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"name":   name,
+		"engine": stored.Engine,
+		"host":   stored.Host,
+		"port":   stored.Port,
+	})
+}
+
+// handleRemoveDatabase responds to DELETE /api/v1/databases/{name}.
+// Removes a database configuration from the Manager.
+func (s *Server) handleRemoveDatabase(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	if err := s.cfg.DBManager.RemoveDatabase(name); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			WriteError(w, http.StatusNotFound, ErrCodeServiceNotFound, "database not found")
+		} else {
+			WriteError(w, http.StatusInternalServerError, ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------
