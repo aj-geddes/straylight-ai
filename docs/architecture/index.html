@@ -1,7 +1,7 @@
 ---
 layout: default
 title: "Architecture — Docker Container, MCP, Vault Internals"
-description: "Straylight-AI architecture: Docker container internals, data flow from AI agent through MCP server to OpenBao vault to external API, security layers. All diagrams in HTML/SVG."
+description: "Straylight-AI architecture: Docker container internals, data flow from AI coding assistant through MCP server to OpenBao vault to external API, database manager, cloud provider manager, scanner, firewall, audit logger, lease manager, and security layers. All diagrams in HTML/SVG."
 permalink: /architecture/
 ---
 
@@ -10,9 +10,10 @@ permalink: /architecture/
     <div class="section-label">Architecture</div>
     <h1 class="section-title">How Straylight-AI is built</h1>
     <p class="section-subtitle">
-      A self-hosted Docker container housing four cooperating components: an MCP server,
-      an HTTP proxy, an OpenBao vault, and a React dashboard. Every component is
-      stateless except the vault &mdash; credentials survive restarts, everything else is ephemeral.
+      A self-hosted Docker container housing cooperating components: an MCP server,
+      an HTTP proxy, an OpenBao vault, a React dashboard, and (in v0.2.0) a database manager,
+      cloud provider manager, scanner, firewall, audit logger, and lease manager. Every component
+      is stateless except the vault &mdash; credentials survive restarts, everything else is ephemeral.
     </p>
   </div>
 </section>
@@ -187,8 +188,131 @@ permalink: /architecture/
   </div>
 </section>
 
+<!-- New Components: v0.2.0 -->
+<section class="section section--alt" id="new-components" aria-labelledby="new-components-heading">
+  <div class="container">
+    <div class="section-label">New in v0.2.0</div>
+    <h2 id="new-components-heading" class="section-title">Five new internal components</h2>
+    <p class="section-subtitle">
+      The v0.2.0 release adds five new components to the Go MCP server, all coordinated through
+      a shared audit event bus and lease manager. Each component is independent and can be
+      disabled individually through configuration.
+    </p>
+
+    <div class="stack-grid">
+      <div class="stack-category">
+        <h3>Database Manager</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Package: <code>internal/database/</code></strong>
+            <span>Manages the OpenBao database secrets engine. Accepts a SQL query from the <code>straylight_db_query</code> MCP tool, provisions a temporary database user via OpenBao (<code>CREATE ROLE</code> with scoped grants), executes the query through an internal connection pool, and emits a revocation event when the lease expires.</span>
+          </li>
+          <li>
+            <strong>Supported engines</strong>
+            <span>PostgreSQL, MySQL / MariaDB, Redis (OpenBao built-in plugins). Admin connection strings are stored encrypted in the vault and are never exposed to the MCP layer.</span>
+          </li>
+          <li>
+            <strong>Lease integration</strong>
+            <span>Delegates all TTL and renewal logic to the Lease Manager. Default TTL is 10 minutes. On expiry, OpenBao executes the configured revocation statement (<code>DROP ROLE</code>).</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Cloud Provider Manager</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Package: <code>internal/cloud/</code></strong>
+            <span>Coordinates with AWS STS, GCP token service, and Azure identity to generate ephemeral credentials on demand. Uses native Go SDKs &mdash; no OpenBao external plugins required.</span>
+          </li>
+          <li>
+            <strong>Credential injection</strong>
+            <span>Ephemeral credentials are injected as environment variables (<code>AWS_ACCESS_KEY_ID</code>, <code>GOOGLE_OAUTH_ACCESS_TOKEN</code>, <code>AZURE_CLIENT_SECRET</code>) into the subprocess started by <code>straylight_exec</code>. They are not returned to the MCP layer.</span>
+          </li>
+          <li>
+            <strong>Scope templates</strong>
+            <span>Pre-defined permission scopes (read-only, deploy, specific service) reduce the blast radius of any single session. Parent credentials are stored in vault only.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Scanner</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Package: <code>internal/scanner/</code></strong>
+            <span>Walks the project directory tree, applies the sanitizer's regex pattern set to each file, and produces a structured report of findings. Invoked via the <code>straylight_scan</code> MCP tool.</span>
+          </li>
+          <li>
+            <strong>Detection patterns</strong>
+            <span>Reuses the same 14-category regex engine as the output sanitizer, covering AWS keys, GitHub PATs, Stripe keys, OpenAI keys, private key headers, connection strings, generic API key patterns, and more.</span>
+          </li>
+          <li>
+            <strong>Report format</strong>
+            <span>Each finding includes file path, line number, pattern category, severity, and a redacted preview. The report includes recommended ignore rules for Claude Code, Cursor, Windsurf, and Roo.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Firewall</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Package: <code>internal/firewall/</code></strong>
+            <span>Intercepts file read requests from the <code>straylight_read_file</code> MCP tool. Applies a two-rule decision: block the file entirely (returns a vault-redirect message) or redact secrets in place (returns the file structure with values masked).</span>
+          </li>
+          <li>
+            <strong>Block rules</strong>
+            <span><code>.env</code>, <code>.env.*</code>, <code>*credentials*</code>, <code>*secret*</code>, <code>id_rsa</code>, <code>*.pem</code> patterns result in a blocked response with guidance to use <code>straylight_api_call</code> instead.</span>
+          </li>
+          <li>
+            <strong>Redact rules</strong>
+            <span>Config files (<code>docker-compose.yml</code>, <code>settings.py</code>, <code>*.yaml</code>) are served with secrets replaced by <code>[STRAYLIGHT:service-name]</code>. File structure is preserved so the AI coding assistant can reason about non-sensitive sections.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Audit Logger</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Package: <code>internal/audit/</code></strong>
+            <span>Event bus with a JSON Lines append-only writer. All other components emit structured events to the bus. The logger writes to <code>/data/audit/access.jsonl</code> and maintains an in-memory ring buffer for dashboard queries.</span>
+          </li>
+          <li>
+            <strong>Event producers</strong>
+            <span>Every MCP tool call (api_call, exec, db_query, scan, read_file) emits an audit event. Events include timestamp, tool name, service name, action taken, and whether sanitization fired. Credentials are never included in audit events.</span>
+          </li>
+          <li>
+            <strong>Rotation and retention</strong>
+            <span>Log files rotate at 100&thinsp;MB. Retention is configurable. The dashboard audit page queries the ring buffer for recent events and streams from the log file for historical queries.</span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="stack-category">
+        <h3>Lease Manager</h3>
+        <ul class="stack-list">
+          <li>
+            <strong>Package: <code>internal/lease/</code></strong>
+            <span>Lease-aware credential cache that replaces the fixed 60-second TTL cache used in v0.1.0. Tracks OpenBao lease IDs, handles renewal before expiry, and fires revocation on session end or explicit release.</span>
+          </li>
+          <li>
+            <strong>Renewal strategy</strong>
+            <span>Renews leases at 75% of TTL elapsed. Stops renewing at <code>max_ttl</code>. On renewal failure, marks the credential as expired and forces re-provisioning on next use.</span>
+          </li>
+          <li>
+            <strong>Used by</strong>
+            <span>Database Manager (database credential leases) and Cloud Provider Manager (session token tracking). Static KV secrets from v0.1.0 continue to use a simple TTL cache.</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- Data Flow -->
-<section class="section section--alt" id="data-flow" aria-labelledby="flow-heading">
+<section class="section" id="data-flow" aria-labelledby="flow-heading">
   <div class="container">
     <div class="section-label">Data Flow</div>
     <h2 id="flow-heading" class="section-title">Request lifecycle: agent to API and back</h2>
@@ -345,7 +469,7 @@ permalink: /architecture/
         <ul class="stack-list">
           <li>
             <strong>Go 1.23+</strong>
-            <span>MCP server, HTTP proxy, vault client, output sanitizer</span>
+            <span>MCP server, HTTP proxy, vault client, output sanitizer, database manager, cloud provider manager, scanner, firewall, audit logger, lease manager</span>
           </li>
           <li>
             <strong>net/http + RoundTripper</strong>
@@ -353,11 +477,15 @@ permalink: /architecture/
           </li>
           <li>
             <strong>hashicorp/vault/api</strong>
-            <span>OpenBao client (fully compatible)</span>
+            <span>OpenBao client (fully compatible), used for KV and database secrets engines</span>
           </li>
           <li>
             <strong>mark3labs/mcp-go</strong>
-            <span>MCP protocol implementation</span>
+            <span>MCP protocol implementation; seven tools in v0.2.0</span>
+          </li>
+          <li>
+            <strong>AWS SDK for Go v2, google.golang.org/api, Azure SDK</strong>
+            <span>Cloud provider SDKs for ephemeral credential generation (STS AssumeRole, GCP token service, Azure identity)</span>
           </li>
         </ul>
       </div>
@@ -371,7 +499,11 @@ permalink: /architecture/
           </li>
           <li>
             <strong>KV Secrets Engine v2</strong>
-            <span>Versioned key-value secret storage</span>
+            <span>Versioned key-value secret storage for static credentials</span>
+          </li>
+          <li>
+            <strong>Database Secrets Engine</strong>
+            <span>Dynamic credential provisioning for PostgreSQL, MySQL, and Redis; temporary users with auto-revocation</span>
           </li>
           <li>
             <strong>AppRole Auth Method</strong>

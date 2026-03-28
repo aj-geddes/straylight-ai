@@ -258,3 +258,15 @@ npx straylight-ai
 You'll need to re-add your services.
 
 See the [User Guide](/straylight/docs/user-guide/) for more configuration options and troubleshooting.
+
+## What's Next
+
+Once you've added your first API service, explore these additional capabilities:
+
+- **Database credentials** — Connect a PostgreSQL or MySQL database. Straylight provisions temporary, limited-permission database users for each query and revokes them automatically. The AI never sees a connection string or password. See the [User Guide — Database Credentials](/straylight/docs/user-guide/#database-credentials) section.
+
+- **Cloud credentials** — Configure AWS, GCP, or Azure. When the AI runs a cloud CLI command through `straylight_exec`, Straylight generates short-lived credentials via STS AssumeRole, GCP token exchange, or Azure token acquisition and injects them as environment variables. See the [User Guide — Cloud Provider Credentials](/straylight/docs/user-guide/#cloud-provider-credentials) section.
+
+- **Secret scanning** — Run `straylight_scan` at the start of a session on an unfamiliar codebase to identify which files contain secrets before the AI reads them. The scanner detects AWS keys, GitHub PATs, Stripe keys, connection strings, and more. See the [User Guide — Secret Scanner](/straylight/docs/user-guide/#secret-scanner) section.
+
+- **Sensitive file firewall** — Use `straylight_read_file` instead of reading files directly. Straylight redacts secret values and returns the file structure intact, so the AI can understand your configuration without seeing credentials. See the [User Guide — Sensitive File Firewall](/straylight/docs/user-guide/#sensitive-file-firewall) section.

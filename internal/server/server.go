@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/straylight-ai/straylight/internal/audit"
+	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/oauth"
 	"github.com/straylight-ai/straylight/internal/services"
 )
@@ -54,6 +56,14 @@ type Config struct {
 	// ActivityLog tracks tool call activity for the stats endpoint.
 	// When nil, a new empty log is created automatically.
 	ActivityLog *ActivityLog
+
+	// AuditLogger is the audit event logger used by the audit API endpoints.
+	// When nil, audit endpoints return 501 Not Implemented.
+	AuditLogger *audit.Logger
+
+	// DBManager is the database credential manager for database service management.
+	// When nil, database endpoints return 501 Not Implemented.
+	DBManager *database.Manager
 }
 
 // Options holds optional tuning parameters for the server's security middleware.

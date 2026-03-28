@@ -1,6 +1,4 @@
 import { execSync } from "child_process";
-import * as os from "os";
-import * as path from "path";
 
 /** Name of the managed container */
 export const CONTAINER_NAME = "straylight-ai";
@@ -11,8 +9,8 @@ export const CONTAINER_IMAGE = "ghcr.io/aj-geddes/straylight-ai:latest";
 /** Host port mapped to container port 9470 */
 export const CONTAINER_PORT = 9470;
 
-/** Host data directory mounted at /data inside the container */
-export const DATA_DIR = path.join(os.homedir(), ".straylight-ai", "data");
+/** Named Docker volume mounted at /data inside the container */
+export const VOLUME_NAME = "straylight-ai-data";
 
 /** Container status values */
 export type ContainerStatus = "running" | "stopped" | "not_found";
@@ -74,7 +72,7 @@ export function buildRunCommand(runtime: string): string {
     "-d",
     `--name ${CONTAINER_NAME}`,
     `-p ${CONTAINER_PORT}:${CONTAINER_PORT}`,
-    `-v ${DATA_DIR}:/data`,
+    `-v ${VOLUME_NAME}:/data`,
     "--restart unless-stopped",
     CONTAINER_IMAGE,
   ].join(" ");

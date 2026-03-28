@@ -27,6 +27,55 @@ type Config struct {
 	Server    ServerConfig              `yaml:"server"`
 	Sanitizer SanitizerConfig           `yaml:"sanitizer"`
 	Services  map[string]ServiceConfig  `yaml:"services"`
+	Databases map[string]DatabaseConfig `yaml:"databases"`
+	Cloud     CloudConfig               `yaml:"cloud"`
+}
+
+// CloudConfig holds global defaults for cloud provider temporary credentials.
+type CloudConfig struct {
+	// AWS holds global AWS defaults.
+	AWS CloudAWSDefaults `yaml:"aws"`
+	// GCP holds global GCP defaults.
+	GCP CloudGCPDefaults `yaml:"gcp"`
+	// Azure holds global Azure defaults.
+	Azure CloudAzureDefaults `yaml:"azure"`
+}
+
+// CloudAWSDefaults holds global AWS defaults applied when a service config
+// does not specify these fields.
+type CloudAWSDefaults struct {
+	// DefaultRegion is the AWS region if not specified per-service.
+	DefaultRegion string `yaml:"default_region"`
+	// DefaultSessionDurationSecs is the STS session TTL. Range: 900-43200.
+	// Defaults to 900 (15 minutes, the AWS minimum).
+	DefaultSessionDurationSecs int `yaml:"default_session_duration_seconds"`
+}
+
+// CloudGCPDefaults holds global GCP defaults.
+type CloudGCPDefaults struct {
+	// DefaultTokenLifetimeSecs is the access token TTL. Defaults to 3600 (1 hour).
+	DefaultTokenLifetimeSecs int `yaml:"default_token_lifetime_seconds"`
+}
+
+// CloudAzureDefaults holds global Azure defaults.
+type CloudAzureDefaults struct {
+	// DefaultScope is the token scope. Defaults to "https://management.azure.com/.default".
+	DefaultScope string `yaml:"default_scope"`
+}
+
+// DatabaseConfig holds configuration for a database service (type=database).
+// Admin credentials are stored in vault; this struct captures connection metadata.
+type DatabaseConfig struct {
+	Engine        string `yaml:"engine"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	Database      string `yaml:"database"`
+	SSLMode       string `yaml:"ssl_mode"`
+	AdminUser     string `yaml:"admin_user"`
+	AdminPassword string `yaml:"admin_password"`
+	DefaultRole   string `yaml:"default_role"`
+	DefaultTTL    string `yaml:"default_ttl"`
+	MaxTTL        string `yaml:"max_ttl"`
 }
 
 // VaultConfig holds OpenBao connection settings.
@@ -67,7 +116,54 @@ type ServiceConfig struct {
 	TimeoutSeconds     int               `yaml:"timeout_seconds"`
 	ExecConfig         *ExecConfig       `yaml:"exec_config"`
 	OAuthConfig        *OAuthConfig      `yaml:"oauth_config"`
+	CloudConfig        *CloudServiceConfig `yaml:"cloud_config"`
 	CredentialPatterns []string          `yaml:"credential_patterns"`
+}
+
+// CloudServiceConfig holds cloud-provider-specific configuration for a service
+// with type=cloud. The Engine field determines which sub-config is used.
+type CloudServiceConfig struct {
+	// Engine identifies the cloud provider: "aws", "gcp", or "azure".
+	Engine string `yaml:"engine"`
+
+	// AWS holds AWS-specific configuration. Used when Engine is "aws".
+	AWS *CloudServiceAWSConfig `yaml:"aws"`
+	// GCP holds GCP-specific configuration. Used when Engine is "gcp".
+	GCP *CloudServiceGCPConfig `yaml:"gcp"`
+	// Azure holds Azure-specific configuration. Used when Engine is "azure".
+	Azure *CloudServiceAzureConfig `yaml:"azure"`
+}
+
+// CloudServiceAWSConfig holds AWS-specific fields for a cloud service.
+type CloudServiceAWSConfig struct {
+	// RoleARN is the IAM role ARN for STS AssumeRole.
+	RoleARN string `yaml:"role_arn"`
+	// Region sets AWS_DEFAULT_REGION. Defaults to the global CloudAWSDefaults.DefaultRegion.
+	Region string `yaml:"region"`
+	// SessionDurationSecs is the STS session TTL. Zero uses the global default (900s).
+	SessionDurationSecs int `yaml:"session_duration_seconds"`
+	// SessionPolicy is an optional inline IAM policy JSON for further scope restriction.
+	SessionPolicy string `yaml:"session_policy"`
+}
+
+// CloudServiceGCPConfig holds GCP-specific fields for a cloud service.
+type CloudServiceGCPConfig struct {
+	// ProjectID sets CLOUDSDK_CORE_PROJECT.
+	ProjectID string `yaml:"project_id"`
+	// Scopes are the OAuth2 scopes for the access token.
+	Scopes []string `yaml:"scopes"`
+	// TokenLifetimeSecs is the requested token TTL. Zero uses the global default (3600s).
+	TokenLifetimeSecs int `yaml:"token_lifetime_seconds"`
+}
+
+// CloudServiceAzureConfig holds Azure-specific fields for a cloud service.
+type CloudServiceAzureConfig struct {
+	// TenantID is the Azure AD tenant ID (stored in vault, not here).
+	TenantID string `yaml:"tenant_id"`
+	// SubscriptionID sets AZURE_SUBSCRIPTION_ID.
+	SubscriptionID string `yaml:"subscription_id"`
+	// Scope is the token audience. Defaults to the global CloudAzureDefaults.DefaultScope.
+	Scope string `yaml:"scope"`
 }
 
 // ExecConfig holds configuration for command execution credential injection.
@@ -175,11 +271,18 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("config: server.log_format %q is invalid; must be one of: text, json", cfg.Server.LogFormat)
 	}
 
+	validServiceTypes := map[string]bool{
+		"http_proxy": true,
+		"oauth":      true,
+		"database":   true,
+		"cloud":      true,
+	}
 	for name, svc := range cfg.Services {
-		if svc.Type != "http_proxy" && svc.Type != "oauth" {
-			return fmt.Errorf("config: services.%s.type %q is invalid; must be http_proxy or oauth", name, svc.Type)
+		if !validServiceTypes[svc.Type] {
+			return fmt.Errorf("config: services.%s.type %q is invalid; must be http_proxy, oauth, database, or cloud", name, svc.Type)
 		}
-		if svc.Target == "" {
+		// Database and cloud services do not require a target URL.
+		if svc.Type != "database" && svc.Type != "cloud" && svc.Target == "" {
 			return fmt.Errorf("config: services.%s.target is required", name)
 		}
 	}

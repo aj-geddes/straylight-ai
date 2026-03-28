@@ -9,7 +9,7 @@ COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Go binary (with embedded SPA)
-FROM golang:1.25-alpine AS go-builder
+FROM golang:1.25.8-alpine AS go-builder
 WORKDIR /build
 # Download dependencies before copying source for layer caching.
 COPY go.mod go.sum ./
@@ -24,10 +24,10 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /straylight ./cmd/straylight/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /straylight-mcp ./cmd/straylight-mcp/
 
 # Stage 3: Minimal Alpine runtime image
-FROM alpine:3.21 AS runtime
+FROM alpine:3.23 AS runtime
 
 # OpenBao version to install. Pin to a specific release for reproducibility.
-ARG OPENBAO_VERSION=2.5.1
+ARG OPENBAO_VERSION=2.5.2
 # TARGETARCH is set automatically by `docker buildx build --platform ...`.
 # Values: amd64, arm64.
 ARG TARGETARCH

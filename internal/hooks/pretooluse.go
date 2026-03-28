@@ -40,13 +40,26 @@ var credentialFilePaths = []string{
 }
 
 // credentialFilePatterns contains file name patterns that indicate a command
-// is trying to read a secrets file. Matching uses substring search.
+// is trying to read a secrets file. Matching uses substring search against the
+// full command or file path.
 var credentialFilePatterns = []string{
 	".env",
+	"id_rsa",
+	"id_ed25519",
+	".pem",
+	".key",
+	"credentials.json",
+	"serviceAccountKey.json",
+	"~/.aws/credentials",
 }
 
-// suggestionMessage is appended to every block reason.
+// suggestionMessage is appended to every block reason for credential env vars
+// and generic credential paths.
 const suggestionMessage = "Use straylight_api_call or straylight_exec instead."
+
+// sensitiveFileSuggestionMessage is appended when the block is for a sensitive
+// file read. It guides the user to the straylight_read_file tool.
+const sensitiveFileSuggestionMessage = "Use straylight_read_file to read this file with secrets automatically redacted."
 
 // ServiceLister provides the list of registered services.
 // The PreToolUseChecker uses this to derive runtime credential env var names.
@@ -109,12 +122,12 @@ func (c *PreToolUseChecker) Check(input PreToolUseInput) (allow bool, message st
 		}
 	}
 
-	// Check for credential file name patterns (e.g. "cat .env").
+	// Check for credential file name patterns (e.g. "cat .env", "cat id_rsa").
 	for _, pattern := range credentialFilePatterns {
-		if matchesFilePattern(text, pattern) {
+		if matchesSensitiveFile(text, pattern) {
 			return false, fmt.Sprintf(
 				"Blocked: command targets credential file %q. %s",
-				pattern, suggestionMessage,
+				pattern, sensitiveFileSuggestionMessage,
 			)
 		}
 	}
@@ -164,6 +177,47 @@ func matchesFilePattern(text, pattern string) bool {
 		end := i + len(pattern)
 		rightOK := end == len(text) || text[end] == ' ' || text[end] == '\t' || text[end] == '\n' || text[end] == ';' || text[end] == '|'
 		if leftOK && rightOK {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesSensitiveFile checks whether text contains a reference to a sensitive
+// file. It handles:
+//   - Path fragments like "~/.aws/credentials" (substring match)
+//   - Extension-based patterns like ".pem", ".key" (extension match)
+//   - Exact file names like "id_rsa", "credentials.json" (token match)
+func matchesSensitiveFile(text, pattern string) bool {
+	// Patterns starting with "~/" or "/" are path-fragment patterns: substring match.
+	if strings.HasPrefix(pattern, "~/") || strings.HasPrefix(pattern, "/") {
+		return strings.Contains(text, pattern)
+	}
+
+	// Patterns starting with "." that contain only an extension (no letters before
+	// the dot) are extension matchers: match any file ending with that extension.
+	// Examples: ".pem", ".key"
+	if strings.HasPrefix(pattern, ".") && !strings.HasPrefix(pattern, ".env") {
+		return containsExtension(text, pattern)
+	}
+
+	// Default: exact token match (same as the original matchesFilePattern).
+	return matchesFilePattern(text, pattern)
+}
+
+// containsExtension returns true if text contains any word ending with the
+// given extension (e.g., ".pem", ".key"). The extension must appear at the end
+// of a file-path token (followed by whitespace, end-of-string, or punctuation).
+func containsExtension(text, ext string) bool {
+	for i := len(ext) - 1; i < len(text); i++ {
+		end := i + 1
+		if text[end-len(ext):end] != ext {
+			continue
+		}
+		// Confirm end boundary: must be at end or followed by space/tab/newline/;/|
+		rightOK := end == len(text) || text[end] == ' ' || text[end] == '\t' ||
+			text[end] == '\n' || text[end] == ';' || text[end] == '|' || text[end] == '"' || text[end] == '\''
+		if rightOK {
 			return true
 		}
 	}

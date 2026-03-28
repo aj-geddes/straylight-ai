@@ -34,16 +34,55 @@ const (
 	pollInterval = 100 * time.Millisecond
 
 	// straylightPolicy is the HCL policy document granting read/write access to
-	// the services secret path and the AppRole auth paths.
+	// the services secret path, the AppRole auth paths, and the database secrets engine.
 	straylightPolicy = `
 path "secret/data/services/*" {
   capabilities = ["create", "read", "update", "delete", "list"]
 }
+path "secret/data/services/+/credential" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+path "secret/data/services/+/metadata" {
+  capabilities = ["create", "read", "update", "delete"]
+}
 path "secret/metadata/services/*" {
+  capabilities = ["list", "read", "delete"]
+}
+path "secret/metadata/services/+/credential" {
+  capabilities = ["list", "read", "delete"]
+}
+path "secret/metadata/services/+/metadata" {
   capabilities = ["list", "read", "delete"]
 }
 path "auth/approle/role/straylight/secret-id" {
   capabilities = ["update"]
+}
+path "secret/data/config/*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+path "secret/metadata/config/*" {
+  capabilities = ["list", "read", "delete"]
+}
+path "database/config/*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+path "database/roles/*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+path "database/creds/*" {
+  capabilities = ["read"]
+}
+path "sys/leases/revoke" {
+  capabilities = ["update"]
+}
+path "sys/leases/revoke-prefix/database/*" {
+  capabilities = ["update"]
+}
+path "sys/leases/lookup" {
+  capabilities = ["update"]
+}
+path "sys/mounts/database" {
+  capabilities = ["create", "read", "update"]
 }
 `
 )
@@ -293,6 +332,11 @@ func (s *Supervisor) runFullInit(client *Client) (*Client, error) {
 		return nil, fmt.Errorf("vault: enable KV mount: %w", err)
 	}
 
+	// Step 3b: Enable database secrets engine at database/
+	if err := s.enableDatabaseEngine(client); err != nil {
+		return nil, fmt.Errorf("vault: enable database engine: %w", err)
+	}
+
 	// Step 4: Create straylight policy
 	if err := s.createPolicy(client); err != nil {
 		return nil, fmt.Errorf("vault: create policy: %w", err)
@@ -377,6 +421,28 @@ func (s *Supervisor) unseal(client *Client, key string) error {
 	if result.Sealed {
 		return fmt.Errorf("vault reported still sealed after unseal attempt")
 	}
+	return nil
+}
+
+// enableDatabaseEngine mounts the database secrets engine at "database/".
+// If the engine is already mounted (HTTP 400 "path is already in use"), the
+// error is silently ignored — idempotent for restarts.
+func (s *Supervisor) enableDatabaseEngine(client *Client) error {
+	payload := map[string]interface{}{
+		"type":        "database",
+		"description": "Straylight dynamic database credentials",
+	}
+	err := client.apiCall(http.MethodPost, "/v1/sys/mounts/database", payload, nil)
+	if err != nil {
+		// OpenBao returns a 400 with "path is already in use" when already mounted.
+		// Treat this as success so the init flow is idempotent across restarts.
+		if strings.Contains(err.Error(), "already in use") || strings.Contains(err.Error(), "status 400") {
+			s.logger.Info("vault: database engine already mounted, skipping")
+			return nil
+		}
+		return fmt.Errorf("vault: enable database engine: %w", err)
+	}
+	s.logger.Info("vault: database secrets engine mounted at database/")
 	return nil
 }
 

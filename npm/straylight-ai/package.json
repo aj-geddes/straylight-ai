@@ -1,6 +1,6 @@
 {
   "name": "straylight-ai",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Zero-knowledge credential proxy for AI agents",
   "bin": {
     "straylight-ai": "bin/cli.js",
@@ -20,7 +20,8 @@
   "files": [
     "bin/",
     "dist/",
-    "src/"
+    "src/",
+    "README.md"
   ],
   "keywords": [
     "mcp",

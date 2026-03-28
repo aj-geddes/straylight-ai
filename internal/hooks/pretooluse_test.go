@@ -286,6 +286,156 @@ func TestPreToolUse_AllowsNonCredentialWhenServicesRegistered(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Enhanced sensitive file patterns (Phase 1c additions)
+// ---------------------------------------------------------------------------
+
+func TestPreToolUse_BlocksCatPemFile(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat server.pem",
+		},
+	}
+	allow, msg := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat server.pem")
+	}
+	if msg == "" {
+		t.Error("expected non-empty block reason")
+	}
+}
+
+func TestPreToolUse_BlocksCatKeyFile(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat private.key",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat private.key")
+	}
+}
+
+func TestPreToolUse_BlocksCatIdRsa(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat ~/.ssh/id_rsa",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat id_rsa")
+	}
+}
+
+func TestPreToolUse_BlocksCatIdEd25519(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat ~/.ssh/id_ed25519",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat id_ed25519")
+	}
+}
+
+func TestPreToolUse_BlocksCatCredentialsJSON(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat credentials.json",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat credentials.json")
+	}
+}
+
+func TestPreToolUse_BlocksCatServiceAccountKey(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat serviceAccountKey.json",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat serviceAccountKey.json")
+	}
+}
+
+func TestPreToolUse_BlocksCatAWSCredentials(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat ~/.aws/credentials",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for cat ~/.aws/credentials")
+	}
+}
+
+func TestPreToolUse_BlocksReadOfSSHPrivateKey(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Read",
+		ToolInput: map[string]interface{}{
+			"file_path": "/home/user/.ssh/id_rsa",
+		},
+	}
+	allow, _ := checker.Check(input)
+	if allow {
+		t.Error("expected block for Read of id_rsa")
+	}
+}
+
+func TestPreToolUse_EnhancedBlockReasonSuggestsStraylightReadFile(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat server.pem",
+		},
+	}
+	_, msg := checker.Check(input)
+	if msg == "" {
+		t.Fatal("expected non-empty message")
+	}
+	if !contains(msg, "straylight_read_file") {
+		t.Errorf("block reason for sensitive file should suggest straylight_read_file, got: %q", msg)
+	}
+}
+
+func TestPreToolUse_DotEnvBlockReasonSuggestsStraylightReadFile(t *testing.T) {
+	checker := newEmptyChecker()
+	input := PreToolUseInput{
+		ToolName: "Bash",
+		ToolInput: map[string]interface{}{
+			"command": "cat .env",
+		},
+	}
+	_, msg := checker.Check(input)
+	if !contains(msg, "straylight_read_file") {
+		t.Errorf("block reason for .env should suggest straylight_read_file, got: %q", msg)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

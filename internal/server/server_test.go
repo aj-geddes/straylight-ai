@@ -19,7 +19,7 @@ import (
 func TestHealthEndpoint_ReturnsJSON(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -54,8 +54,8 @@ func TestHealthEndpoint_ReturnsJSON(t *testing.T) {
 	if !ok {
 		t.Fatal("expected 'version' field as string in response")
 	}
-	if version != "0.1.0" {
-		t.Errorf("expected version=0.1.0, got %q", version)
+	if version != "0.5.0" {
+		t.Errorf("expected version=0.5.0, got %q", version)
 	}
 
 	// Verify the openbao field is present; without a VaultStatus func it should
@@ -86,7 +86,7 @@ func TestHealthEndpoint_OpenbaoStatus(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := server.New(server.Config{
 				ListenAddress: "127.0.0.1:0",
-				Version:       "0.1.0",
+				Version:       "0.5.0",
 				VaultStatus:   tc.vaultStatusFn,
 			})
 
@@ -114,7 +114,7 @@ func TestHealthEndpoint_OpenbaoStatus(t *testing.T) {
 func TestHealthEndpoint_MethodNotAllowed(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/health", nil)
@@ -131,7 +131,7 @@ func TestHealthEndpoint_MethodNotAllowed(t *testing.T) {
 func TestWebUIRoute_ReturnsHTML(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -154,7 +154,7 @@ func TestWebUIRoute_ReturnsHTML(t *testing.T) {
 func TestUnknownRoute_ReturnsSPAFallback(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/some/spa/route", nil)
@@ -172,7 +172,7 @@ func TestUnknownRoute_ReturnsSPAFallback(t *testing.T) {
 func TestServerConfig_ListenAddress(t *testing.T) {
 	cfg := server.Config{
 		ListenAddress: "0.0.0.0:9470",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	}
 
 	srv := server.New(cfg)
@@ -185,7 +185,7 @@ func TestServerConfig_ListenAddress(t *testing.T) {
 func TestServicesPlaceholder_Returns501(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/services/", nil)
@@ -210,7 +210,7 @@ func TestServicesPlaceholder_Returns501(t *testing.T) {
 func TestMCPPlaceholder_Returns501(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mcp/tool-list", nil)
@@ -227,7 +227,7 @@ func TestMCPPlaceholder_Returns501(t *testing.T) {
 func TestOAuthPlaceholder_Returns501(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/oauth/github/start", nil)
@@ -253,7 +253,7 @@ func TestRun_StartsAndStops(t *testing.T) {
 
 	srv := server.New(server.Config{
 		ListenAddress: addr,
-		Version:       "0.1.0",
+		Version:       "0.5.0",
 		// Provide a VaultStatus so the health endpoint returns 200 (unsealed).
 		VaultStatus: func() string { return "unsealed" },
 	})

@@ -7,11 +7,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/straylight-ai/straylight/internal/firewall"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/proxy"
+	"github.com/straylight-ai/straylight/internal/scanner"
 	"github.com/straylight-ai/straylight/internal/services"
 )
 
@@ -55,6 +59,40 @@ func newTestHandler(p mcp.ProxyHandler, s mcp.ServiceLister) *mcp.Handler {
 	return mcp.NewHandler(p, s)
 }
 
+// newRealFirewall creates a *firewall.Firewall with the given projectRoot and
+// registers it as the FileReader on the handler via SetFileReader.
+// It returns the Firewall so tests can configure it further if needed.
+func newRealFirewall(t *testing.T, projectRoot string) *firewall.Firewall {
+	t.Helper()
+	cfg := firewall.DefaultConfig()
+	cfg.ProjectRoot = projectRoot
+	return firewall.NewFirewall(cfg)
+}
+
+// mockScannerResult is a simple mock for mcp.DirectoryScanner that returns
+// pre-configured results.
+type mockScannerResult struct {
+	result *scanner.ScanResult
+	err    error
+}
+
+func (m *mockScannerResult) ScanDirectory(_ string) (*scanner.ScanResult, error) {
+	return m.result, m.err
+}
+
+// newMockScannerWithFindings creates a mockScannerResult with the given
+// findings and filesScanned count.
+func newMockScannerWithFindings(findings []scanner.Finding, filesScanned int) mcp.DirectoryScanner {
+	return &mockScannerResult{
+		result: &scanner.ScanResult{
+			Findings:     findings,
+			FilesScanned: filesScanned,
+			FilesSkipped: 0,
+			DurationMS:   1,
+		},
+	}
+}
+
 func doRequest(h http.Handler, method, path string, body interface{}) *httptest.ResponseRecorder {
 	var reqBody *bytes.Reader
 	if body != nil {
@@ -85,7 +123,7 @@ func decodeToolResult(t *testing.T, w *httptest.ResponseRecorder) mcp.ToolCallRe
 // HandleToolList tests
 // ---------------------------------------------------------------------------
 
-func TestHandleToolList_ReturnsAllFourTools(t *testing.T) {
+func TestHandleToolList_ReturnsSixTools(t *testing.T) {
 	h := newTestHandler(&mockProxy{}, &mockServices{})
 	w := doRequest(h, http.MethodGet, "/api/v1/mcp/tool-list", nil)
 
@@ -100,8 +138,8 @@ func TestHandleToolList_ReturnsAllFourTools(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	if len(resp.Tools) != 4 {
-		t.Fatalf("expected 4 tools, got %d", len(resp.Tools))
+	if len(resp.Tools) != 7 {
+		t.Fatalf("expected 7 tools, got %d", len(resp.Tools))
 	}
 }
 
@@ -121,7 +159,7 @@ func TestHandleToolList_ContainsAllToolNames(t *testing.T) {
 		names[tool.Name] = true
 	}
 
-	required := []string{"straylight_api_call", "straylight_exec", "straylight_check", "straylight_services"}
+	required := []string{"straylight_api_call", "straylight_exec", "straylight_check", "straylight_services", "straylight_scan", "straylight_read_file", "straylight_db_query"}
 	for _, name := range required {
 		if !names[name] {
 			t.Errorf("tool %q missing from tool list", name)
@@ -912,5 +950,380 @@ func TestToolCallResult_ContentIsNeverEmpty(t *testing.T) {
 				t.Errorf("tool %q returned empty content array", tool)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// straylight_scan tool — stub
+// ---------------------------------------------------------------------------
+
+func TestHandleToolCall_ScanReturnsStub(t *testing.T) {
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path": ".",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if len(result.Content) == 0 {
+		t.Fatal("expected non-empty content for straylight_scan")
+	}
+}
+
+func TestHandleToolCall_ScanIsNotError(t *testing.T) {
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool":      "straylight_scan",
+		"arguments": map[string]interface{}{},
+	})
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Error("straylight_scan stub should not set isError=true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// straylight_read_file tool
+// ---------------------------------------------------------------------------
+
+func TestHandleToolCall_ReadFile_MissingPathArgument_IsError(t *testing.T) {
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool":      "straylight_read_file",
+		"arguments": map[string]interface{}{},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with isError, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if !result.IsError {
+		t.Error("missing path should set isError=true")
+	}
+}
+
+func TestHandleToolCall_ReadFile_NonExistentFile_IsError(t *testing.T) {
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_read_file",
+		"arguments": map[string]interface{}{
+			"path": "/nonexistent/path/to/file.txt",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with isError, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if !result.IsError {
+		t.Error("nonexistent file should set isError=true")
+	}
+}
+
+func TestHandleToolCall_ReadFile_ReturnsContent(t *testing.T) {
+	// Use a real Firewall with the temp dir as project root so that reading
+	// a file within the temp dir is permitted.
+	tmpDir := t.TempDir()
+	content := "Hello, straylight!\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "hello.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetFileReader(newRealFirewall(t, tmpDir))
+
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_read_file",
+		"arguments": map[string]interface{}{
+			"path": filepath.Join(tmpDir, "hello.txt"),
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Errorf("should not be an error, got: %v", result.Content)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected non-empty content")
+	}
+	if !strings.Contains(result.Content[0].Text, "Hello, straylight!") {
+		t.Errorf("expected content to contain 'Hello, straylight!', got: %q", result.Content[0].Text)
+	}
+}
+
+func TestHandleToolCall_ReadFile_BlockedFile_IsError(t *testing.T) {
+	// Write a temp .env file and use a real Firewall with the temp dir as root
+	// so the firewall can enforce its blocked-file list.
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	if err := os.WriteFile(envPath, []byte("SECRET=value\n"), 0600); err != nil {
+		t.Fatalf("write .env file: %v", err)
+	}
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetFileReader(newRealFirewall(t, tmpDir))
+
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_read_file",
+		"arguments": map[string]interface{}{
+			"path": envPath,
+		},
+	})
+
+	result := decodeToolResult(t, w)
+	if !result.IsError {
+		t.Error("blocked .env file should set isError=true")
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected error message content")
+	}
+	// Error message should mention vault or blocked or sensitive.
+	text := result.Content[0].Text
+	if !strings.Contains(text, "vault") && !strings.Contains(text, "blocked") && !strings.Contains(text, "sensitive") {
+		t.Errorf("error message should mention vault/blocked/sensitive, got: %q", text)
+	}
+}
+
+func TestHandleToolCall_ReadFile_ContentTypeIsText(t *testing.T) {
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(goFile, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetFileReader(newRealFirewall(t, tmpDir))
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_read_file",
+		"arguments": map[string]interface{}{
+			"path": goFile,
+		},
+	})
+
+	result := decodeToolResult(t, w)
+	for _, item := range result.Content {
+		if item.Type != "text" {
+			t.Errorf("content item type should be 'text', got %q", item.Type)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// straylight_scan tool
+// ---------------------------------------------------------------------------
+
+func TestHandleToolCall_Scan_MissingPath_UsesDefault(t *testing.T) {
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool":      "straylight_scan",
+		"arguments": map[string]interface{}{},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if len(result.Content) == 0 {
+		t.Fatal("expected non-empty content")
+	}
+	// With an empty path, the handler uses "." which may or may not produce
+	// findings, but it must return a valid JSON payload (not an error about
+	// a missing argument).
+}
+
+func TestHandleToolCall_Scan_NonexistentPath_IsError(t *testing.T) {
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path": "/does/not/exist/at/all",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 with isError, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if !result.IsError {
+		t.Error("nonexistent path should set isError=true")
+	}
+}
+
+func TestHandleToolCall_Scan_ValidPath_ReturnsFindingsJSON(t *testing.T) {
+	// Use a mock scanner with a pre-populated finding so we can assert the
+	// JSON response structure without scanning the real filesystem.
+	// The handler now rejects absolute paths, so we use "." and a mock scanner.
+	mockSc := newMockScannerWithFindings([]scanner.Finding{
+		{File: "creds.env", Line: 1, Pattern: "aws-access-key", Severity: "high", Match: "AKIA[...]E123"},
+	}, 1)
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetScanner(mockSc)
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path": ".", // relative path — required by security fix
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+	if len(result.Content) == 0 {
+		t.Fatal("expected non-empty content")
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "findings") {
+		t.Errorf("response should contain 'findings' key, got: %q", text)
+	}
+	if !strings.Contains(text, "files_scanned") {
+		t.Errorf("response should contain 'files_scanned', got: %q", text)
+	}
+}
+
+func TestHandleToolCall_Scan_GenerateIgnore_IncludesIgnoreRules(t *testing.T) {
+	mockSc := newMockScannerWithFindings([]scanner.Finding{
+		{File: ".env", Line: 1, Pattern: "env-secret", Severity: "medium", Match: "**[...]***"},
+	}, 1)
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetScanner(mockSc)
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path":            ".", // relative path required by security fix
+			"generate_ignore": true,
+		},
+	})
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+
+	text := result.Content[0].Text
+	if !strings.Contains(text, "ignore_rules") {
+		t.Errorf("response with generate_ignore=true should contain 'ignore_rules', got: %q", text)
+	}
+}
+
+func TestHandleToolCall_Scan_GenerateIgnoreFalse_NoIgnoreRulesField(t *testing.T) {
+	mockSc := newMockScannerWithFindings([]scanner.Finding{}, 0)
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetScanner(mockSc)
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path":            ".", // relative path required by security fix
+			"generate_ignore": false,
+		},
+	})
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Fatalf("expected success: %v", result.Content)
+	}
+
+	text := result.Content[0].Text
+	// When generate_ignore is false, no ignore_rules field should appear
+	if strings.Contains(text, "ignore_rules") {
+		t.Errorf("response with generate_ignore=false should NOT contain 'ignore_rules', got: %q", text)
+	}
+}
+
+func TestHandleToolCall_Scan_ContentTypeIsText(t *testing.T) {
+	mockSc := newMockScannerWithFindings([]scanner.Finding{}, 0)
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetScanner(mockSc)
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path": ".", // relative path required by security fix
+		},
+	})
+
+	result := decodeToolResult(t, w)
+	for _, item := range result.Content {
+		if item.Type != "text" {
+			t.Errorf("content type should be 'text', got %q", item.Type)
+		}
+	}
+}
+
+func TestHandleToolCall_Scan_SeverityFilterHigh_FiltersResults(t *testing.T) {
+	mockSc := newMockScannerWithFindings([]scanner.Finding{
+		{File: "creds.env", Line: 1, Pattern: "aws-access-key", Severity: "high", Match: "AKIA[...]E123"},
+		{File: "other.txt", Line: 2, Pattern: "bearer-token", Severity: "medium", Match: "Bear[...]xyz"},
+	}, 2)
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetScanner(mockSc)
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path":            ".", // relative path required by security fix
+			"severity_filter": "high",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
+	}
+	text := result.Content[0].Text
+	if !strings.Contains(text, "findings") {
+		t.Errorf("expected findings in response, got: %q", text)
+	}
+}
+
+func TestHandleToolCall_Scan_SeverityFilterMedium_IncludesMediumAndHigh(t *testing.T) {
+	mockSc := newMockScannerWithFindings([]scanner.Finding{
+		{File: "curl.sh", Line: 1, Pattern: "bearer-token", Severity: "medium", Match: "Bear[...]xyz"},
+	}, 1)
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetScanner(mockSc)
+	w := doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_scan",
+		"arguments": map[string]interface{}{
+			"path":            ".", // relative path required by security fix
+			"severity_filter": "medium",
+		},
+	})
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	result := decodeToolResult(t, w)
+	if result.IsError {
+		t.Fatalf("expected success, got error: %v", result.Content)
 	}
 }

@@ -28,6 +28,50 @@ func newPattern(pattern, label, prefix string) credentialPattern {
 	}
 }
 
+// ExportedPattern is a read-only view of a credentialPattern exposed for use
+// by other packages (e.g. internal/scanner).  It contains only the fields
+// needed for detection: the compiled regex expression source string, the
+// human-readable label, and an optional literal prefix hint.
+type ExportedPattern struct {
+	// Pattern is the original regex source string (not compiled).
+	Pattern string
+	// Label is the human-readable credential type, e.g. "aws-access-key".
+	Label string
+	// Prefix is the literal prefix used as a fast-path gate.  May be empty.
+	Prefix string
+}
+
+// Patterns returns a copy of the built-in credential patterns so that other
+// packages can apply the same detection logic without duplicating regexes.
+// The returned slice is a snapshot; it is safe to read concurrently but
+// callers must not modify elements.
+func Patterns() []ExportedPattern {
+	out := make([]ExportedPattern, len(builtinPatterns))
+	for i, p := range builtinPatterns {
+		out[i] = ExportedPattern{
+			Pattern: p.re.String(),
+			Label:   labelFromRedacted(p.redacted),
+			Prefix:  p.prefix,
+		}
+	}
+	return out
+}
+
+// labelFromRedacted extracts the label from a pre-built "[REDACTED:<label>]"
+// string, e.g. "[REDACTED:aws-access-key]" -> "aws-access-key".
+func labelFromRedacted(redacted string) string {
+	// Format is "[REDACTED:<label>]"
+	const prefix = "[REDACTED:"
+	if len(redacted) < len(prefix)+1 {
+		return redacted
+	}
+	inner := redacted[len(prefix):]
+	if n := len(inner); n > 0 && inner[n-1] == ']' {
+		return inner[:n-1]
+	}
+	return inner
+}
+
 // builtinPatterns contains pre-compiled regex patterns for common credential
 // formats ordered from most specific to least specific, ensuring that accurate
 // labels appear before generic ones have a chance to match.
@@ -76,4 +120,25 @@ var builtinPatterns = []credentialPattern{
 	// postgresql://, mongodb://, redis:// followed by non-whitespace chars.
 	// "://" is the common infix shared by all three.
 	newPattern(`(?:postgresql|mongodb|redis)://\S+`, "connection-string", "://"),
+
+	// --- AWS STS temporary access key ID ---
+	// ASIA prefix (temporary/session credentials) followed by exactly 16 uppercase chars.
+	// Listed after AKIA to avoid masking the more specific root-key pattern.
+	newPattern(`ASIA[A-Z0-9]{16}`, "aws-session-key", "ASIA"),
+
+	// --- AWS session token ---
+	// Session tokens are long base64 strings beginning with "//" or contain
+	// "AQoXb3JnYW5pemF0aW9u" prefix. Detect by looking for the "//AQo" pattern
+	// common to AWS temp session tokens.
+	newPattern(`//AQo[A-Za-z0-9+/=]{40,}`, "aws-session-token", "//AQo"),
+
+	// --- GCP access token ---
+	// Google OAuth2 access tokens begin with "ya29." followed by 100+ base64url chars.
+	newPattern(`ya29\.[A-Za-z0-9_-]{100,}`, "gcp-access-token", "ya29."),
+
+	// --- Azure bearer token (JWT) ---
+	// Azure AD tokens are JWTs: three base64url segments separated by dots.
+	// The header always starts with "eyJ" ({"alg": or {"typ":).
+	// Pattern: eyJ<20+>.<20+>.<20+>
+	newPattern(`eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}`, "azure-jwt-token", "eyJ"),
 }

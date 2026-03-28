@@ -100,8 +100,16 @@ type ExecRequest struct {
 	Command string `json:"command"`
 
 	// EnvVar is the environment variable name to inject with the credential value,
-	// e.g. "GH_TOKEN".
+	// e.g. "GH_TOKEN". Used for single-credential (http_proxy / oauth) services.
+	// Ignored when EnvVars is non-empty.
 	EnvVar string `json:"env_var"`
+
+	// EnvVars is a map of environment variable names to values for services that
+	// require multiple credentials (e.g., cloud services with AWS_ACCESS_KEY_ID,
+	// AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN). When non-empty, EnvVars takes
+	// precedence over EnvVar. All keys must satisfy the same format constraints
+	// as EnvVar: uppercase, not reserved.
+	EnvVars map[string]string `json:"env_vars,omitempty"`
 
 	// TimeoutSeconds is the maximum execution time in seconds. Zero defaults to
 	// defaultTimeoutSeconds (30).
@@ -129,34 +137,49 @@ type ExecResponse struct {
 
 // Execute runs the command described by req inside a subprocess.
 //
-// The credential for req.Service is fetched from the resolver and injected as
-// an environment variable named req.EnvVar. The subprocess runs in a minimal
-// environment (PATH, HOME, USER, TERM, plus req.EnvVar). Both stdout and
-// stderr are captured, sanitized, and returned in ExecResponse.
+// When req.EnvVars is non-empty (cloud services), all key-value pairs are
+// injected as environment variables and req.EnvVar is ignored.
+// When req.EnvVars is empty, the credential for req.Service is fetched from
+// the resolver and injected as a single environment variable named req.EnvVar.
+//
+// The subprocess runs in a minimal environment (PATH, HOME, USER, TERM plus
+// the injected credential variable(s)). Both stdout and stderr are captured,
+// sanitized, and returned in ExecResponse.
 //
 // Execute returns a non-nil error only for setup failures (unknown service,
 // missing credential, command not found, allowlist violation). Timeout and
 // non-zero exit codes are reported via ExecResponse.ExitCode without returning
 // an error.
 func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
-	// Validate env_var name before any credential lookup.
-	if !envVarPattern.MatchString(req.EnvVar) {
-		return nil, fmt.Errorf("cmdwrap: env_var %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", req.EnvVar)
-	}
-	if reservedEnvVars[req.EnvVar] {
-		return nil, fmt.Errorf("cmdwrap: env_var %q is a reserved system variable", req.EnvVar)
-	}
-
 	// Resolve service metadata — ensures the service exists.
 	_, err := w.resolver.Get(req.Service)
 	if err != nil {
 		return nil, fmt.Errorf("cmdwrap: %w", err)
 	}
 
-	// Resolve credential — ensures a credential is stored.
-	credential, err := w.resolver.GetCredential(req.Service)
-	if err != nil {
-		return nil, fmt.Errorf("cmdwrap: %w", err)
+	var envPairs []string
+
+	if len(req.EnvVars) > 0 {
+		// Multi-var path: validate and collect all entries.
+		pairs, err := buildEnvVarsMap(req.EnvVars)
+		if err != nil {
+			return nil, err
+		}
+		envPairs = pairs
+	} else {
+		// Single-var path: validate env_var and resolve credential.
+		if !envVarPattern.MatchString(req.EnvVar) {
+			return nil, fmt.Errorf("cmdwrap: env_var %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", req.EnvVar)
+		}
+		if reservedEnvVars[req.EnvVar] {
+			return nil, fmt.Errorf("cmdwrap: env_var %q is a reserved system variable", req.EnvVar)
+		}
+
+		credential, err := w.resolver.GetCredential(req.Service)
+		if err != nil {
+			return nil, fmt.Errorf("cmdwrap: %w", err)
+		}
+		envPairs = buildEnv(req.EnvVar, credential)
 	}
 
 	// Parse the command string into argv.
@@ -181,8 +204,8 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 	// Build the command. exec.LookPath is called implicitly by exec.CommandContext.
 	cmd := exec.CommandContext(timeoutCtx, argv[0], argv[1:]...)
 
-	// Build a minimal environment.
-	cmd.Env = buildEnv(req.EnvVar, credential)
+	// Set the minimal environment (essential keys + injected credentials).
+	cmd.Env = appendEssentialEnv(envPairs)
 
 	// Attach stdout and stderr pipes for separate capture.
 	var stdoutBuf, stderrBuf limitedBuffer
@@ -262,17 +285,40 @@ func checkAllowlist(binary, service string, allowed []string) error {
 	return fmt.Errorf("cmdwrap: command %q is not allowed for service %q", binary, service)
 }
 
-// buildEnv constructs a minimal environment slice consisting of essential
-// variables copied from the parent process environment, plus the named
-// credential env var.
+// buildEnv constructs a single-entry credential slice for the legacy single
+// env var path. Returns only the credential pair; appendEssentialEnv adds
+// the system-level keys.
 func buildEnv(envVar, credential string) []string {
-	env := make([]string, 0, len(essentialEnvKeys)+1)
+	return []string{envVar + "=" + credential}
+}
+
+// buildEnvVarsMap validates and converts a map[string]string of env vars into
+// "KEY=VALUE" pairs. Returns an error if any key is invalid or reserved.
+func buildEnvVarsMap(envVars map[string]string) ([]string, error) {
+	pairs := make([]string, 0, len(envVars))
+	for k, v := range envVars {
+		if !envVarPattern.MatchString(k) {
+			return nil, fmt.Errorf("cmdwrap: env var key %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", k)
+		}
+		if reservedEnvVars[k] {
+			return nil, fmt.Errorf("cmdwrap: env var key %q is a reserved system variable", k)
+		}
+		pairs = append(pairs, k+"="+v)
+	}
+	return pairs, nil
+}
+
+// appendEssentialEnv prepends essential env vars copied from the parent
+// process (PATH, HOME, USER, TERM) to the given credential pairs, producing
+// the complete minimal environment for a subprocess.
+func appendEssentialEnv(credPairs []string) []string {
+	env := make([]string, 0, len(essentialEnvKeys)+len(credPairs))
 	for _, key := range essentialEnvKeys {
 		if val, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+val)
 		}
 	}
-	env = append(env, envVar+"="+credential)
+	env = append(env, credPairs...)
 	return env
 }
 
