@@ -22,10 +22,18 @@ This will:
 
 ## Add a Service
 
-1. Open http://localhost:9470
-2. Click "Add Service"
+1. Open http://localhost:9470 and go to **Services**
+2. Click **Add Service**
 3. Select a template (GitHub, Stripe, OpenAI, AWS, and more) or create a custom service
 4. Paste your API key — it goes straight into the encrypted vault
+
+## Web Dashboard
+
+The dashboard at http://localhost:9470 has three pages:
+
+- **Dashboard** — Live system metrics: health status, vault state, uptime, API call counts, credential access stats, audit event breakdown, service status overview, and recent activity feed. Polls every 15 seconds.
+- **Services** — Add, configure, and manage your service credentials. Supports 16+ templates with multiple auth methods per service.
+- **Help** — Searchable user guide with getting started steps, key concepts, MCP tools reference, supported services directory, FAQ, and troubleshooting.
 
 ## Connect to Your AI Coding Assistant
 
@@ -49,7 +57,6 @@ Any MCP-compatible AI coding assistant works. The MCP server speaks the standard
 | `npx straylight-ai start` | Start the container |
 | `npx straylight-ai stop` | Stop the container |
 | `npx straylight-ai status` | Check health and service status |
-| `npx straylight-ai logs` | View container logs |
 
 ## MCP Tools
 
@@ -59,8 +66,8 @@ Once registered, your AI coding assistant has access to:
 |------|-------------|
 | `straylight_api_call` | Make an authenticated HTTP request. Credentials injected automatically. |
 | `straylight_exec` | Run a command with credentials as environment variables. Output sanitized. |
-| `straylight_db_query` | Query a database with dynamic temporary credentials. |
-| `straylight_scan` | Scan project files for exposed secrets. |
+| `straylight_db_query` | Query a database with dynamic temporary credentials that auto-expire. |
+| `straylight_scan` | Scan project files for exposed secrets across 14 pattern categories. |
 | `straylight_read_file` | Read a file with secrets automatically redacted. |
 | `straylight_check` | Check whether a credential is available for a service. |
 | `straylight_services` | List all configured services and their status. |
@@ -81,20 +88,19 @@ Your AI assistant calls a Straylight MCP tool. The container fetches the credent
 
 ## Database Credentials
 
-Configure a database once in the dashboard. When your AI coding assistant needs data, it calls `straylight_db_query` — Straylight provisions a temporary database user, runs the query, and returns the results. The AI never sees the password.
+Configure a database once on the Services page. When your AI coding assistant needs data, it calls `straylight_db_query` — Straylight provisions a temporary database user, runs the query, and returns the results. The AI never sees the password.
 
 ```
 // AI calls:
 straylight_db_query(service="my-postgres", query="SELECT id, name FROM users LIMIT 10")
 ```
 
-- Credentials are read-only by default and auto-expire (5–15 min TTL)
+- Credentials are read-only by default and auto-expire (5-15 min TTL)
 - Supported: PostgreSQL, MySQL/MariaDB, Redis
-- [Full documentation](https://aj-geddes.github.io/straylight-ai/docs/database-credentials)
 
 ## Cloud Credentials
 
-Configure an AWS, GCP, or Azure account in the dashboard. When the AI needs to run a cloud CLI command, it calls `straylight_exec` with a named service — Straylight generates short-lived temporary credentials, injects them as environment variables, and returns the sanitized output.
+Configure an AWS, GCP, or Azure account on the Services page. When the AI needs to run a cloud CLI command, it calls `straylight_exec` with a named service — Straylight generates short-lived temporary credentials, injects them as environment variables, and returns the sanitized output.
 
 ```
 // AI calls:
@@ -104,7 +110,6 @@ straylight_exec(service="aws-prod", command="aws s3 ls s3://my-bucket")
 - AWS: STS AssumeRole with inline session policies
 - GCP: Workload Identity Federation tokens
 - Azure: short-lived access tokens
-- [Full documentation](https://aj-geddes.github.io/straylight-ai/docs/cloud-credentials)
 
 ## Secret Scanner
 
@@ -117,7 +122,6 @@ straylight_scan(path="/home/user/my-project")
 
 - Detects AWS keys, GitHub PATs, Stripe keys, connection strings, private keys, and more
 - Returns file paths, line numbers, secret types, and severity
-- [Full documentation](https://aj-geddes.github.io/straylight-ai/docs/secret-scanner)
 
 ## File Firewall
 
@@ -131,16 +135,15 @@ straylight_read_file(path="docker-compose.yml")
 
 - Blocked file patterns: `.env*`, `*credentials*`, `*secret*`, `*.pem`, SSH keys
 - Legitimate files served clean — structure intact, secrets masked
-- [Full documentation](https://aj-geddes.github.io/straylight-ai/docs/file-firewall)
 
 ## Audit Trail
 
 Every credential access, API call, and command execution is logged with a timestamp, service name, tool used, and session ID. No credentials appear in the log.
 
-View the audit log in the dashboard at http://localhost:9470 or query it via the API.
-
-- Append-only local log, no retention cap on the free tier
-- [Full documentation](https://aj-geddes.github.io/straylight-ai/docs/audit-trail)
+View the audit feed on the Dashboard page at http://localhost:9470, including:
+- Event counts by type and by service
+- Credential access frequency
+- Recent activity with tool and request details
 
 ## Supported Services
 
@@ -152,7 +155,10 @@ View the audit log in the dashboard at http://localhost:9470 or query it via the
 - **Transport-layer injection** — credentials never exposed to the AI
 - **Output sanitization** — credential patterns stripped from all responses
 - **Dynamic database credentials** — temporary users with automatic revocation
-- **Non-root container** — UID 10001, minimal Alpine image
+- **Temporary cloud credentials** — AWS STS, GCP, Azure tokens generated per invocation
+- **Non-root container** — UID 10001, minimal Alpine 3.23 image
+- **Go 1.25.8** — all stdlib CVEs patched
+- **OpenBao 2.5.2** — all known CVEs patched
 
 ## Optional: Claude Code Hooks
 
@@ -173,10 +179,28 @@ For extra protection, add hooks that block credential-accessing commands and san
 }
 ```
 
+## FAQ
+
+**Does my AI coding assistant ever see my credentials?**
+No. Credentials stay inside the vault. The proxy injects them into HTTP requests. The AI only receives the API response, which is also sanitized for credential patterns.
+
+**What happens if I restart the container?**
+Credentials persist in the named Docker volume `straylight-ai-data`. The container re-unseals the vault and is operational within seconds.
+
+**Can I use services not on the template list?**
+Yes. Select "Custom Service" and provide the base URL and auth method.
+
+**Does this work offline?**
+Yes. Straylight runs entirely on your machine. You only need network access to reach the target APIs themselves.
+
+**Is there a cloud/hosted version?**
+No. Straylight is local-only by design. Your credentials never leave your machine.
+
 ## Links
 
 - [Documentation](https://aj-geddes.github.io/straylight-ai/docs/quickstart)
 - [GitHub](https://github.com/aj-geddes/straylight-ai)
+- [Changelog](https://github.com/aj-geddes/straylight-ai/blob/main/CHANGELOG.md)
 - [Issues](https://github.com/aj-geddes/straylight-ai/issues)
 
 ## License
@@ -185,4 +209,4 @@ Apache-2.0
 
 ---
 
-Built by [High Velocity Solutions LLC](https://highvelocitysolutions.com)
+Built by [High Velocity Solutions LLC](https://highvelocitysolutions-llc.com)

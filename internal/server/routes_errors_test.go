@@ -165,7 +165,7 @@ func TestServiceError_CheckNotFound_HasErrorCode(t *testing.T) {
 func TestHealth_Degraded_WhenVaultUnavailable(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.5.0",
+		Version:       "1.0.0",
 		VaultStatus:   func() string { return "unavailable" },
 	})
 
@@ -193,7 +193,7 @@ func TestHealth_Degraded_WhenVaultUnavailable(t *testing.T) {
 func TestHealth_Degraded_WhenVaultSealed(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.5.0",
+		Version:       "1.0.0",
 		VaultStatus:   func() string { return "sealed" },
 	})
 
@@ -218,7 +218,7 @@ func TestHealth_Degraded_WhenVaultSealed(t *testing.T) {
 func TestHealth_OK_WhenVaultUnsealed(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.5.0",
+		Version:       "1.0.0",
 		VaultStatus:   func() string { return "unsealed" },
 	})
 

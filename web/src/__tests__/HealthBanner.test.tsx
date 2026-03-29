@@ -15,7 +15,7 @@ describe('HealthBanner - status rendering', () => {
       openbao: 'unsealed',
       services_count: 1,
       uptime_seconds: 60,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     vi.spyOn(client, 'getHealth').mockResolvedValue(healthOk);
 
@@ -31,7 +31,7 @@ describe('HealthBanner - status rendering', () => {
       status: 'starting',
       services_count: 0,
       uptime_seconds: 3,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     vi.spyOn(client, 'getHealth').mockResolvedValue(healthStarting);
 
@@ -48,7 +48,7 @@ describe('HealthBanner - status rendering', () => {
       openbao: 'sealed',
       services_count: 0,
       uptime_seconds: 10,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     vi.spyOn(client, 'getHealth').mockResolvedValue(healthDegraded);
 
@@ -89,7 +89,7 @@ describe('HealthBanner - status rendering', () => {
       status: 'ok',
       services_count: 1,
       uptime_seconds: 60,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     vi.spyOn(client, 'getHealth').mockResolvedValue(healthOk);
 
@@ -106,7 +106,7 @@ describe('HealthBanner - status rendering', () => {
       status: 'starting',
       services_count: 0,
       uptime_seconds: 3,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     vi.spyOn(client, 'getHealth').mockResolvedValue(healthStarting);
 
@@ -123,7 +123,7 @@ describe('HealthBanner - status rendering', () => {
       status: 'degraded',
       services_count: 0,
       uptime_seconds: 0,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     vi.spyOn(client, 'getHealth').mockResolvedValue(healthDegraded);
 
@@ -144,7 +144,7 @@ describe('HealthBanner - polling', () => {
       status: 'ok',
       services_count: 1,
       uptime_seconds: 60,
-      version: '0.5.0',
+      version: '1.0.0',
     };
     const spy = vi.spyOn(client, 'getHealth').mockResolvedValue(healthOk);
 
