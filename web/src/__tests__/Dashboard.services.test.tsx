@@ -27,7 +27,7 @@ const MOCK_HEALTH: HealthResponse = {
   status: 'ok',
   services_count: 2,
   uptime_seconds: 120,
-  version: '0.1.0',
+  version: '0.5.0',
 };
 
 const MOCK_SERVICES: Service[] = [

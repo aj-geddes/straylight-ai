@@ -23,7 +23,7 @@ describe('Dashboard', () => {
       status: 'ok',
       services_count: 0,
       uptime_seconds: 10,
-      version: '0.1.0',
+      version: '0.5.0',
     } as HealthResponse);
   });
 

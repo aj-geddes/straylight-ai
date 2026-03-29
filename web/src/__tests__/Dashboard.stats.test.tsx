@@ -4,7 +4,7 @@ import { Dashboard } from '../pages/Dashboard';
 import type { StatsResponse } from '../api/client';
 
 vi.mock('../api/client', () => ({
-  getHealth: vi.fn().mockResolvedValue({ status: 'ok', version: '0.1.0', openbao: 'unsealed' }),
+  getHealth: vi.fn().mockResolvedValue({ status: 'ok', version: '0.5.0', openbao: 'unsealed' }),
   getServices: vi.fn().mockResolvedValue([]),
   getTemplates: vi.fn().mockResolvedValue([]),
   getStats: vi.fn().mockResolvedValue({

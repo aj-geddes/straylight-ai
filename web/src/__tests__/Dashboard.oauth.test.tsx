@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { Dashboard } from '../pages/Dashboard';
 
 vi.mock('../api/client', () => ({
-  getHealth: vi.fn().mockResolvedValue({ status: 'ok', openbao: 'unsealed', version: '0.1.0' }),
+  getHealth: vi.fn().mockResolvedValue({ status: 'ok', openbao: 'unsealed', version: '0.5.0' }),
   getServices: vi.fn().mockResolvedValue([]),
   getTemplates: vi.fn().mockResolvedValue([]),
   addServiceFromTemplate: vi.fn(),
