@@ -12,6 +12,8 @@ const HEALTH_ENDPOINT = '/api/v1/health';
 const SERVICES_ENDPOINT = '/api/v1/services';
 const TEMPLATES_ENDPOINT = '/api/v1/templates';
 const STATS_ENDPOINT = '/api/v1/stats';
+const AUDIT_STATS_ENDPOINT = '/api/v1/audit/stats';
+const AUDIT_EVENTS_ENDPOINT = '/api/v1/audit/events';
 
 // ---------------------------------------------------------------------------
 // Stats / activity types
@@ -195,6 +197,69 @@ export async function getStats(): Promise<StatsResponse> {
       uptime_seconds: 0,
       recent_activity: [],
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Audit
+// ---------------------------------------------------------------------------
+
+export interface AuditStatsResponse {
+  by_type: Record<string, number>;
+  by_service: Record<string, number>;
+  total: number;
+}
+
+export interface AuditEvent {
+  id: string;
+  timestamp: string;
+  type: string;
+  service?: string;
+  tool?: string;
+  session_id?: string;
+  request_id?: string;
+  details?: Record<string, string>;
+}
+
+export interface AuditEventsResponse {
+  events: AuditEvent[];
+  total: number;
+}
+
+/**
+ * Returns aggregate audit statistics: event counts by type and by service.
+ */
+export async function getAuditStats(): Promise<AuditStatsResponse> {
+  try {
+    const response = await fetch(AUDIT_STATS_ENDPOINT);
+    if (!response.ok) {
+      return { by_type: {}, by_service: {}, total: 0 };
+    }
+    return response.json();
+  } catch {
+    return { by_type: {}, by_service: {}, total: 0 };
+  }
+}
+
+/**
+ * Returns recent audit events, optionally filtered.
+ */
+export async function getAuditEvents(
+  opts: { limit?: number; event_type?: string; service?: string } = {}
+): Promise<AuditEventsResponse> {
+  try {
+    const params = new URLSearchParams();
+    if (opts.limit) params.set('limit', String(opts.limit));
+    if (opts.event_type) params.set('event_type', opts.event_type);
+    if (opts.service) params.set('service', opts.service);
+    const qs = params.toString();
+    const response = await fetch(`${AUDIT_EVENTS_ENDPOINT}${qs ? `?${qs}` : ''}`);
+    if (!response.ok) {
+      return { events: [], total: 0 };
+    }
+    return response.json();
+  } catch {
+    return { events: [], total: 0 };
   }
 }
 

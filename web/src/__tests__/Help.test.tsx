@@ -5,34 +5,33 @@ import { Help } from '../pages/Help';
 describe('Help page - sections', () => {
   it('renders Getting Started section', () => {
     render(<Help />);
-    expect(screen.getByText(/getting started/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/getting started/i).length).toBeGreaterThan(0);
   });
 
   it('renders MCP Integration section', () => {
     render(<Help />);
-    expect(screen.getByText(/mcp integration/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/mcp integration/i).length).toBeGreaterThan(0);
   });
 
   it('renders Supported Services section', () => {
     render(<Help />);
-    expect(screen.getByText(/supported services/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/supported services/i).length).toBeGreaterThan(0);
   });
 
   it('renders FAQ section', () => {
     render(<Help />);
-    expect(screen.getByText(/faq/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/faq/i).length).toBeGreaterThan(0);
   });
 
   it('renders Troubleshooting section', () => {
     render(<Help />);
-    expect(screen.getByText(/troubleshooting/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/troubleshooting/i).length).toBeGreaterThan(0);
   });
 });
 
 describe('Help page - content', () => {
   it('shows claude mcp add command', () => {
     render(<Help />);
-    // The command appears in a <code> element inside <pre>
     expect(screen.getAllByText(/claude mcp add/i).length).toBeGreaterThan(0);
   });
 
@@ -73,8 +72,17 @@ describe('Help page - content', () => {
 
   it('shows Getting Started 3-step guide', () => {
     render(<Help />);
-    // Should contain numbered steps (step 1, step 2, step 3)
-    expect(screen.getByText(/step 1|1\./i)).toBeInTheDocument();
+    expect(screen.getByText(/install straylight/i)).toBeInTheDocument();
+  });
+
+  it('renders search input', () => {
+    render(<Help />);
+    expect(screen.getByPlaceholderText(/search help/i)).toBeInTheDocument();
+  });
+
+  it('renders Key Concepts section', () => {
+    render(<Help />);
+    expect(screen.getAllByText(/key concepts/i).length).toBeGreaterThan(0);
   });
 });
 

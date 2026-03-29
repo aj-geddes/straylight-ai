@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, useParams, useNavigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
+import { Services } from './pages/Services';
 import { ServiceConfig } from './pages/ServiceConfig';
 import { Help } from './pages/Help';
 
@@ -10,12 +11,12 @@ function ServiceConfigRoute() {
 
   if (!name) return null;
 
-  return <ServiceConfig name={name} onBack={() => navigate('/')} />;
+  return <ServiceConfig name={name} onBack={() => navigate('/services')} />;
 }
 
 /**
  * Root application component with client-side routing.
- * Routes: / -> Dashboard, /services/:name -> ServiceConfig
+ * Routes: / -> Dashboard, /services -> Services, /services/:name -> ServiceConfig, /help -> Help
  */
 export function App() {
   return (
@@ -33,7 +34,7 @@ export function App() {
           path="/services"
           element={
             <Layout currentPath="/services">
-              <Dashboard />
+              <Services />
             </Layout>
           }
         />

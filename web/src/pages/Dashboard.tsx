@@ -1,326 +1,350 @@
 import { useEffect, useState, useCallback } from 'react';
-import { HealthBanner } from '../components/HealthBanner';
-import { ServiceTile } from '../components/ServiceTile';
-import { AddServiceDialog } from '../components/AddServiceDialog';
-import { getServices, addServiceFromTemplate, getTemplates, getStats } from '../api/client';
-import type { StatsResponse } from '../api/client';
-import type { Service, ServiceTemplate, AddServiceRequest } from '../types/service';
+import { getHealth, getStats, getServices, getAuditStats, getAuditEvents } from '../api/client';
+import type { StatsResponse, AuditStatsResponse, AuditEvent } from '../api/client';
+import type { HealthResponse } from '../types/health';
+import type { Service } from '../types/service';
+import { StatusIndicator } from '../components/StatusIndicator';
+import { ServiceIcon } from '../components/ServiceIcon';
 
-const REFRESH_INTERVAL_MS = 30_000;
-const STATS_REFRESH_INTERVAL_MS = 60_000;
+const POLL_MS = 15_000;
 
-/** Formats uptime seconds into a human-readable string like "1h 5m" or "45s". */
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-  return `${minutes}m`;
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
 }
 
-/** Returns status badge class based on HTTP status code. */
-function statusBadgeClass(status: number): string {
-  if (status >= 200 && status < 300) {
-    return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300';
-  }
-  if (status >= 400) {
+function formatTimeAgo(ts: string): string {
+  const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function eventTypeLabel(t: string): string {
+  return t.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function eventTypeColor(t: string): string {
+  if (t.includes('accessed') || t.includes('read'))
+    return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300';
+  if (t.includes('stored') || t.includes('created'))
+    return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+  if (t.includes('deleted') || t.includes('revoked') || t.includes('expired'))
     return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300';
-  }
+  if (t.includes('rotated') || t.includes('renewed'))
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
   return 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300';
 }
 
-/** Reads oauth=success and service= query params from the current URL. */
-function getOAuthSuccessFromURL(): { success: boolean; serviceName: string } {
-  const params = new URLSearchParams(window.location.search);
-  return {
-    success: params.get('oauth') === 'success',
-    serviceName: params.get('service') ?? '',
-  };
+/** Metric card component */
+function Metric({ label, value, sub, accent }: { label: string; value: string | number; sub?: string; accent?: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+      <p className="text-xs font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">{label}</p>
+      <p className={`mt-1.5 text-2xl font-bold tabular-nums ${accent ?? 'text-slate-900 dark:text-slate-100'}`}>
+        {value}
+      </p>
+      {sub && <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">{sub}</p>}
+    </div>
+  );
 }
 
-/**
- * Main dashboard page.
- * Shows system health, a grid of service tiles, and controls for adding services.
- * Detects oauth=success query param on mount and shows a success banner.
- */
 export function Dashboard() {
-  const [services, setServices] = useState<Service[]>([]);
-  const [templates, setTemplates] = useState<ServiceTemplate[]>([]);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [oauthSuccess, setOauthSuccess] = useState<string | null>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [auditStats, setAuditStats] = useState<AuditStatsResponse | null>(null);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
 
-  const fetchServices = useCallback(async () => {
-    try {
-      const result = await getServices();
-      setServices(result);
-    } catch {
-      // Keep existing list on error; errors shown via health banner
-    }
-  }, []);
-
-  const fetchTemplates = useCallback(async () => {
-    try {
-      const result = await getTemplates();
-      setTemplates(result);
-    } catch {
-      setTemplates([]);
-    }
-  }, []);
-
-  const fetchStats = useCallback(async () => {
-    try {
-      const result = await getStats();
-      setStats(result);
-    } catch {
-      // Stats are non-critical; keep existing on error
-    }
+  const fetchAll = useCallback(async () => {
+    const [h, st, sv, as_, ae] = await Promise.all([
+      getHealth(),
+      getStats(),
+      getServices().catch(() => [] as Service[]),
+      getAuditStats(),
+      getAuditEvents({ limit: 20 }),
+    ]);
+    setHealth(h);
+    setStats(st);
+    setServices(sv);
+    setAuditStats(as_);
+    setAuditEvents(ae.events);
   }, []);
 
   useEffect(() => {
-    void fetchServices();
-    void fetchTemplates();
-    void fetchStats();
+    void fetchAll();
+    const id = setInterval(() => void fetchAll(), POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchAll]);
 
-    // Check for OAuth success redirect.
-    const { success, serviceName } = getOAuthSuccessFromURL();
-    if (success) {
-      setOauthSuccess(serviceName || 'service');
-    }
+  const healthColor = health?.status === 'ok'
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : health?.status === 'starting'
+      ? 'text-amber-600 dark:text-amber-400'
+      : 'text-red-600 dark:text-red-400';
 
-    const servicesInterval = setInterval(() => {
-      void fetchServices();
-    }, REFRESH_INTERVAL_MS);
+  const vaultLabel = health?.openbao === 'unsealed' ? 'Unsealed' : health?.openbao === 'sealed' ? 'Sealed' : 'Unavailable';
+  const vaultColor = health?.openbao === 'unsealed'
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : 'text-red-600 dark:text-red-400';
 
-    const statsInterval = setInterval(() => {
-      void fetchStats();
-    }, STATS_REFRESH_INTERVAL_MS);
+  const availableCount = services.filter((s) => s.status === 'available').length;
+  const degradedCount = services.length - availableCount;
 
-    return () => {
-      clearInterval(servicesInterval);
-      clearInterval(statsInterval);
-    };
-  }, [fetchServices, fetchTemplates, fetchStats]);
+  // Top event types for audit breakdown
+  const topEventTypes = auditStats
+    ? Object.entries(auditStats.by_type)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 6)
+    : [];
 
-  async function handleSaveService(data: AddServiceRequest): Promise<void> {
-    await addServiceFromTemplate(data);
-    await fetchServices();
-  }
-
-  function handleServiceClick(service: Service) {
-    window.location.href = `/services/${service.name}`;
-  }
+  const topServices = auditStats
+    ? Object.entries(auditStats.by_service)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 5)
+    : [];
 
   return (
     <div className="space-y-6">
-      {oauthSuccess !== null && (
-        <div
-          role="status"
-          className="flex items-center justify-between rounded-md border border-green-200 bg-green-50 px-4 py-3 dark:border-green-800 dark:bg-green-900/20"
-        >
-          <p className="text-sm font-medium text-green-800 dark:text-green-200">
-            Successfully connected{' '}
-            <span className="font-semibold">{oauthSuccess}</span> via OAuth.
-          </p>
-          <button
-            type="button"
-            onClick={() => setOauthSuccess(null)}
-            aria-label="Dismiss"
-            className="rounded p-1 text-green-600 hover:bg-green-100 dark:text-green-400 dark:hover:bg-green-900/40"
-          >
-            <svg
-              aria-hidden="true"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      )}
-      <div className="flex items-center justify-between">
-        <HealthBanner />
+      {/* Page header */}
+      <div>
+        <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Dashboard</h1>
+        <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
+          System overview and live metrics
+        </p>
       </div>
 
-      {/* Stats bar — subtle summary below health banner */}
-      {stats !== null && (
-        <div className="flex items-center gap-4 rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
-          <span>
-            <span className="font-medium text-slate-900 dark:text-slate-100">{stats.total_api_calls}</span>
-            {' '}API call{stats.total_api_calls !== 1 ? 's' : ''}
-          </span>
-          <span className="text-slate-300 dark:text-slate-600">|</span>
-          <span>
-            <span className="font-medium text-slate-900 dark:text-slate-100">{stats.total_services}</span>
-            {' '}service{stats.total_services !== 1 ? 's' : ''}
-          </span>
-          <span className="text-slate-300 dark:text-slate-600">|</span>
-          <span>
-            <span className="font-medium text-slate-900 dark:text-slate-100">{formatUptime(stats.uptime_seconds)}</span>
-            {' '}uptime
-          </span>
-        </div>
-      )}
+      {/* Metric cards */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <Metric
+          label="System"
+          value={health ? (health.status === 'ok' ? 'Healthy' : health.status === 'starting' ? 'Starting' : 'Degraded') : '...'}
+          sub={health?.version !== 'unknown' ? `v${health?.version}` : undefined}
+          accent={healthColor}
+        />
+        <Metric
+          label="Vault"
+          value={health ? vaultLabel : '...'}
+          sub="OpenBao"
+          accent={vaultColor}
+        />
+        <Metric
+          label="Uptime"
+          value={stats ? formatUptime(stats.uptime_seconds) : '...'}
+        />
+        <Metric
+          label="Services"
+          value={services.length}
+          sub={services.length > 0 ? `${availableCount} active${degradedCount > 0 ? `, ${degradedCount} degraded` : ''}` : 'None configured'}
+        />
+      </div>
 
-      <section>
-        <div className="mb-5 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-              Services
-            </h2>
-            <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
-              {services.length > 0
-                ? `${services.length} service${services.length === 1 ? '' : 's'} connected`
-                : 'Connect your first service to get started'}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setDialogOpen(true)}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:bg-indigo-500 dark:hover:bg-indigo-600"
-          >
-            <svg
-              aria-hidden="true"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
-            </svg>
-            Add Service
-          </button>
-        </div>
+      {/* Second row — request metrics */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <Metric
+          label="API Calls"
+          value={stats?.total_api_calls ?? 0}
+          sub="Proxied requests"
+        />
+        <Metric
+          label="Exec Calls"
+          value={stats?.total_exec_calls ?? 0}
+          sub="Command executions"
+        />
+        <Metric
+          label="Audit Events"
+          value={auditStats?.total ?? 0}
+          sub="Total logged"
+        />
+        <Metric
+          label="Credential Access"
+          value={auditStats?.by_type?.credential_accessed ?? 0}
+          sub="Vault reads"
+        />
+      </div>
 
-        {services.length === 0 ? (
-          <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-200 bg-white py-16 text-center dark:border-slate-700 dark:bg-slate-800/50">
-            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/30">
-              <svg
-                aria-hidden="true"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-indigo-600 dark:text-indigo-400"
+      {/* Main content: two columns */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Left column: Service status + audit breakdown */}
+        <div className="space-y-6 lg:col-span-1">
+          {/* Service status */}
+          <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Service Status</h2>
+              <a
+                href="/services"
+                className="text-xs font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300"
               >
-                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-              </svg>
+                Manage &rarr;
+              </a>
             </div>
-            <p className="mb-1 text-sm font-medium text-slate-700 dark:text-slate-300">
-              No services configured yet
-            </p>
-            <p className="mb-5 text-sm text-slate-500 dark:text-slate-400">
-              Connect your first service to get started.
-            </p>
-            <button
-              type="button"
-              onClick={() => setDialogOpen(true)}
-              className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/30"
-            >
-              Add your first service
-            </button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {services.map((service) => (
-              <ServiceTile
-                key={service.name}
-                service={service}
-                onClick={handleServiceClick}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Activity feed */}
-      {stats !== null && (
-        <section>
-          <h2 className="mb-3 text-base font-semibold text-slate-900 dark:text-slate-100">
-            Recent Activity
-          </h2>
-          {stats.recent_activity.length === 0 ? (
-            <p className="text-sm text-slate-400 dark:text-slate-500">No recent activity</p>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/50">
-                    <th className="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Time</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Service</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Tool</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Path</th>
-                    <th className="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stats.recent_activity.slice().reverse().map((entry, i) => (
-                    <tr
-                      key={i}
-                      className={
-                        i % 2 === 0
-                          ? 'bg-white dark:bg-slate-800'
-                          : 'bg-slate-50/60 dark:bg-slate-900/30'
-                      }
+            {services.length === 0 ? (
+              <p className="text-sm text-slate-400 dark:text-slate-500">
+                No services configured.{' '}
+                <a href="/services" className="text-indigo-600 hover:underline dark:text-indigo-400">Add one</a>
+              </p>
+            ) : (
+              <ul className="space-y-2.5">
+                {services.map((s) => (
+                  <li key={s.name}>
+                    <a
+                      href={`/services/${s.name}`}
+                      className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-slate-50 dark:hover:bg-slate-700/50"
                     >
-                      <td className="px-3 py-2 text-slate-400 dark:text-slate-500">
-                        {new Date(entry.timestamp).toLocaleTimeString()}
-                      </td>
-                      <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-300">
-                        {entry.service}
-                      </td>
-                      <td className="px-3 py-2 text-slate-500 dark:text-slate-400">
-                        {entry.tool}
-                      </td>
-                      <td className="px-3 py-2 text-slate-400 dark:text-slate-500 font-mono">
-                        {entry.method && entry.path
-                          ? `${entry.method} ${entry.path}`
-                          : entry.path || '—'}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={[
-                            'inline-block rounded px-1.5 py-0.5 font-medium',
-                            statusBadgeClass(entry.status),
-                          ].join(' ')}
-                        >
-                          {entry.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      <ServiceIcon name={s.name} size={28} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-800 dark:text-slate-200">{s.name}</p>
+                        <p className="truncate text-xs text-slate-400 dark:text-slate-500">{s.type}</p>
+                      </div>
+                      <StatusIndicator status={s.status === 'available' ? 'ok' : 'degraded'} />
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Audit breakdown */}
+          {topEventTypes.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+              <h2 className="mb-4 text-sm font-semibold text-slate-900 dark:text-slate-100">Audit Breakdown</h2>
+              <ul className="space-y-2">
+                {topEventTypes.map(([type, count]) => {
+                  const pct = auditStats!.total > 0 ? (count / auditStats!.total) * 100 : 0;
+                  return (
+                    <li key={type}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-600 dark:text-slate-400">{eventTypeLabel(type)}</span>
+                        <span className="font-medium tabular-nums text-slate-900 dark:text-slate-100">{count}</span>
+                      </div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
+                        <div
+                          className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                          style={{ width: `${Math.max(pct, 2)}%` }}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
-        </section>
-      )}
 
-      {dialogOpen && (
-        <AddServiceDialog
-          templates={templates}
-          onSave={handleSaveService}
-          onClose={() => setDialogOpen(false)}
-        />
-      )}
+          {/* Top services by usage */}
+          {topServices.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+              <h2 className="mb-4 text-sm font-semibold text-slate-900 dark:text-slate-100">Top Services</h2>
+              <ul className="space-y-2.5">
+                {topServices.map(([name, count]) => (
+                  <li key={name} className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ServiceIcon name={name} size={22} />
+                      <span className="text-sm text-slate-700 dark:text-slate-300">{name}</span>
+                    </div>
+                    <span className="text-xs font-medium tabular-nums text-slate-500 dark:text-slate-400">
+                      {count} event{count !== 1 ? 's' : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Right column: Activity feed */}
+        <div className="lg:col-span-2">
+          <div className="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Recent Activity</h2>
+              <span className="text-xs text-slate-400 dark:text-slate-500">
+                Last {auditEvents.length} events
+              </span>
+            </div>
+            {auditEvents.length === 0 && stats?.recent_activity?.length === 0 ? (
+              <div className="px-5 py-10 text-center">
+                <p className="text-sm text-slate-400 dark:text-slate-500">No activity recorded yet.</p>
+                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                  Activity will appear here as Claude uses your services.
+                </p>
+              </div>
+            ) : auditEvents.length > 0 ? (
+              <ul className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {auditEvents.map((evt) => (
+                  <li key={evt.id} className="flex gap-3 px-5 py-3">
+                    <div className="mt-0.5 flex-shrink-0">
+                      <span
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ${eventTypeColor(evt.type)}`}
+                      >
+                        {evt.type.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${eventTypeColor(evt.type)}`}>
+                          {eventTypeLabel(evt.type)}
+                        </span>
+                        {evt.service && (
+                          <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{evt.service}</span>
+                        )}
+                      </div>
+                      {evt.tool && (
+                        <p className="mt-0.5 truncate text-xs text-slate-400 dark:text-slate-500">
+                          Tool: {evt.tool}
+                          {evt.details?.method && evt.details?.path && (
+                            <span className="ml-1 font-mono">{evt.details.method} {evt.details.path}</span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                    <span className="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500">
+                      {formatTimeAgo(evt.timestamp)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              /* Fall back to stats recent_activity if no audit events */
+              <ul className="divide-y divide-slate-100 dark:divide-slate-700/50">
+                {stats?.recent_activity?.slice().reverse().map((entry, i) => (
+                  <li key={i} className="flex items-center gap-3 px-5 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{entry.service}</span>
+                        <span className="text-xs text-slate-400 dark:text-slate-500">{entry.tool}</span>
+                      </div>
+                      {entry.method && entry.path && (
+                        <p className="mt-0.5 truncate text-xs font-mono text-slate-400 dark:text-slate-500">
+                          {entry.method} {entry.path}
+                        </p>
+                      )}
+                    </div>
+                    <span
+                      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium tabular-nums ${
+                        entry.status >= 200 && entry.status < 300
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                          : entry.status >= 400
+                            ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                            : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {entry.status}
+                    </span>
+                    <span className="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500">
+                      {formatTimeAgo(entry.timestamp)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

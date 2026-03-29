@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
-import { Dashboard } from '../pages/Dashboard';
-import type { HealthResponse } from '../types/health';
+import { Services as Dashboard } from '../pages/Services';
 import type { Service, ServiceTemplate } from '../types/service';
 
 vi.mock('../api/client', () => ({
-  getHealth: vi.fn(),
   getServices: vi.fn(),
   createService: vi.fn(),
   addServiceFromTemplate: vi.fn(),
@@ -16,19 +14,11 @@ vi.mock('../api/client', () => ({
 }));
 
 import {
-  getHealth,
   getServices,
   getTemplates,
   createService,
   addServiceFromTemplate,
 } from '../api/client';
-
-const MOCK_HEALTH: HealthResponse = {
-  status: 'ok',
-  services_count: 2,
-  uptime_seconds: 120,
-  version: '0.5.0',
-};
 
 const MOCK_SERVICES: Service[] = [
   {
@@ -72,7 +62,7 @@ const MOCK_TEMPLATES: ServiceTemplate[] = [
 
 describe('Dashboard - empty state', () => {
   beforeEach(() => {
-    vi.mocked(getHealth).mockResolvedValue(MOCK_HEALTH);
+
     vi.mocked(getServices).mockResolvedValue([]);
     vi.mocked(getTemplates).mockResolvedValue([]);
   });
@@ -96,7 +86,7 @@ describe('Dashboard - empty state', () => {
 
 describe('Dashboard - populated state', () => {
   beforeEach(() => {
-    vi.mocked(getHealth).mockResolvedValue(MOCK_HEALTH);
+
     vi.mocked(getServices).mockResolvedValue(MOCK_SERVICES);
     vi.mocked(getTemplates).mockResolvedValue(MOCK_TEMPLATES);
   });
@@ -126,7 +116,7 @@ describe('Dashboard - populated state', () => {
 
 describe('Dashboard - auto-refresh', () => {
   beforeEach(() => {
-    vi.mocked(getHealth).mockResolvedValue(MOCK_HEALTH);
+
     vi.mocked(getServices).mockResolvedValue([]);
     vi.mocked(getTemplates).mockResolvedValue([]);
   });
@@ -155,7 +145,7 @@ describe('Dashboard - auto-refresh', () => {
 
 describe('Dashboard - AddServiceDialog flow', () => {
   beforeEach(() => {
-    vi.mocked(getHealth).mockResolvedValue(MOCK_HEALTH);
+
     vi.mocked(getServices).mockResolvedValue([]);
     vi.mocked(getTemplates).mockResolvedValue(MOCK_TEMPLATES);
   });
@@ -211,7 +201,7 @@ describe('Dashboard - AddServiceDialog flow', () => {
 
 describe('Dashboard - createService flow', () => {
   beforeEach(() => {
-    vi.mocked(getHealth).mockResolvedValue(MOCK_HEALTH);
+
     vi.mocked(getServices).mockResolvedValue([]);
     vi.mocked(getTemplates).mockResolvedValue(MOCK_TEMPLATES);
     vi.mocked(createService).mockResolvedValue(MOCK_SERVICES[0]);
@@ -254,7 +244,7 @@ describe('Dashboard - createService flow', () => {
 
 describe('Dashboard - templates fetch error', () => {
   beforeEach(() => {
-    vi.mocked(getHealth).mockResolvedValue(MOCK_HEALTH);
+
     vi.mocked(getServices).mockResolvedValue([]);
   });
 
