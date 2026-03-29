@@ -22,7 +22,7 @@ func newCloudTestServer() *server.Server {
 	reg := newRegistryForCloud(vault)
 	return server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.0",
+		Version:       "1.0.1",
 		Registry:      reg,
 	})
 }
@@ -172,7 +172,7 @@ func TestCloudRoutes_ListFiltersToCloudType(t *testing.T) {
 
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.0",
+		Version:       "1.0.1",
 		Registry:      reg,
 	})
 

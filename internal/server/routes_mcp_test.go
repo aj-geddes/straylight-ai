@@ -55,7 +55,7 @@ func newTestServerWithMCP(t *testing.T) *server.Server {
 	)
 	return server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.0",
+		Version:       "1.0.1",
 		MCPHandler:    handler,
 	})
 }
@@ -113,7 +113,7 @@ func TestMCPRoutes_ToolCallRegistered(t *testing.T) {
 func TestMCPRoutes_ToolListWithoutHandler_Returns501(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.0",
+		Version:       "1.0.1",
 		// MCPHandler intentionally nil
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mcp/tool-list", nil)
@@ -128,7 +128,7 @@ func TestMCPRoutes_ToolListWithoutHandler_Returns501(t *testing.T) {
 func TestMCPRoutes_ToolCallWithoutHandler_Returns501(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.0",
+		Version:       "1.0.1",
 	})
 	body, _ := json.Marshal(map[string]interface{}{
 		"tool":      "straylight_services",

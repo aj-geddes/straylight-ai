@@ -18,7 +18,7 @@ describe('Dashboard', () => {
       status: 'ok',
       services_count: 0,
       uptime_seconds: 120,
-      version: '1.0.0',
+      version: '1.0.1',
       openbao: 'unsealed',
     });
     vi.mocked(getServices).mockResolvedValue([]);
