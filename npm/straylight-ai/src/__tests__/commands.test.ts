@@ -14,6 +14,10 @@ vi.mock("../docker.js", () => ({
   buildRunCommand: vi.fn(),
   buildStartCommand: vi.fn(),
   buildStopCommand: vi.fn(),
+  pullImage: vi.fn(),
+  getImageId: vi.fn(),
+  getContainerImageId: vi.fn(),
+  removeContainer: vi.fn(),
 }));
 
 vi.mock("../health.js", () => ({
@@ -40,6 +44,10 @@ import {
   buildRunCommand,
   buildStartCommand,
   buildStopCommand,
+  pullImage,
+  getImageId,
+  getContainerImageId,
+  removeContainer,
 } from "../docker.js";
 import { waitForHealth, checkHealth } from "../health.js";
 import { registerMCP, isClaudeAvailable } from "../mcp-register.js";
@@ -56,6 +64,10 @@ const mockIsContainerRunning = vi.mocked(isContainerRunning);
 const mockBuildRunCommand = vi.mocked(buildRunCommand);
 const mockBuildStartCommand = vi.mocked(buildStartCommand);
 const mockBuildStopCommand = vi.mocked(buildStopCommand);
+const mockPullImage = vi.mocked(pullImage);
+const mockGetImageId = vi.mocked(getImageId);
+const mockGetContainerImageId = vi.mocked(getContainerImageId);
+const mockRemoveContainer = vi.mocked(removeContainer);
 const mockWaitForHealth = vi.mocked(waitForHealth);
 const mockCheckHealth = vi.mocked(checkHealth);
 const mockRegisterMCP = vi.mocked(registerMCP);
@@ -81,6 +93,10 @@ beforeEach(() => {
   mockIsClaudeAvailable.mockReturnValue(false);
   mockOpenBrowser.mockResolvedValue(undefined);
   mockExecSync.mockReturnValue(Buffer.from(""));
+  mockPullImage.mockReturnValue(false);
+  mockGetImageId.mockReturnValue("sha256:abc123");
+  mockGetContainerImageId.mockReturnValue("sha256:abc123");
+  mockRemoveContainer.mockReturnValue(undefined);
 });
 
 afterEach(() => {

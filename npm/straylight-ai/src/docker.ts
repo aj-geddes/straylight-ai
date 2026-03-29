@@ -93,8 +93,61 @@ export function buildStopCommand(runtime: string): string {
 }
 
 /**
- * Pull the container image.
+ * Pull the container image. Returns true if a newer image was downloaded.
  */
-export function pullImage(runtime: string): void {
+export function pullImage(runtime: string): boolean {
+  const before = getImageId(runtime);
   execSync(`${runtime} pull ${CONTAINER_IMAGE}`, { stdio: "inherit" });
+  const after = getImageId(runtime);
+  return before !== after;
+}
+
+/**
+ * Returns the image ID for the container image, or null if not present.
+ */
+export function getImageId(runtime: string): string | null {
+  try {
+    return execSync(
+      `${runtime} image inspect --format "{{.Id}}" ${CONTAINER_IMAGE}`,
+      { stdio: "pipe" }
+    )
+      .toString()
+      .trim()
+      .replace(/^"|"$/g, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns the image ID that a running/stopped container was created from.
+ */
+export function getContainerImageId(runtime: string): string | null {
+  try {
+    return execSync(
+      `${runtime} inspect --format "{{.Image}}" ${CONTAINER_NAME}`,
+      { stdio: "pipe" }
+    )
+      .toString()
+      .trim()
+      .replace(/^"|"$/g, "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stop and remove the container (preserves the named volume).
+ */
+export function removeContainer(runtime: string): void {
+  try {
+    execSync(`${runtime} stop ${CONTAINER_NAME}`, { stdio: "pipe" });
+  } catch {
+    // already stopped
+  }
+  try {
+    execSync(`${runtime} rm ${CONTAINER_NAME}`, { stdio: "pipe" });
+  } catch {
+    // already removed
+  }
 }

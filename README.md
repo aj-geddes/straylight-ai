@@ -169,7 +169,8 @@ JSON, connection strings, etc.) — pick the one that matches your credential.
 
 | Command | Description |
 |---------|-------------|
-| `npx straylight-ai` | Full setup (pull, start, register) |
+| `npx straylight-ai` | Full setup (pull latest, start, register) |
+| `npx straylight-ai upgrade` | Pull latest image and replace container (data preserved) |
 | `npx straylight-ai start` | Start the container |
 | `npx straylight-ai stop` | Stop the container |
 | `npx straylight-ai status` | Check health and service status |
