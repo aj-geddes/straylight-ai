@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import { Dashboard } from '../pages/Dashboard';
+import { Services as Dashboard } from '../pages/Services';
 
 vi.mock('../api/client', () => ({
-  getHealth: vi.fn().mockResolvedValue({ status: 'ok', openbao: 'unsealed', version: '0.1.0' }),
   getServices: vi.fn().mockResolvedValue([]),
   getTemplates: vi.fn().mockResolvedValue([]),
   addServiceFromTemplate: vi.fn(),

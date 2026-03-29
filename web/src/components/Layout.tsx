@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { ThemeToggle } from './ThemeToggle';
 
-/** Shield icon for Dashboard nav item. */
-function ShieldIcon() {
+/** Activity/metrics icon for Dashboard nav item. */
+function DashboardIcon() {
   return (
     <svg
       aria-hidden="true"
@@ -15,7 +15,10 @@ function ShieldIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
     </svg>
   );
 }
@@ -61,7 +64,7 @@ function HelpIcon() {
 }
 
 const NAV_ITEMS = [
-  { label: 'Dashboard', href: '/', icon: ShieldIcon },
+  { label: 'Dashboard', href: '/', icon: DashboardIcon },
   { label: 'Services', href: '/services', icon: KeyIcon },
   { label: 'Help', href: '/help', icon: HelpIcon },
 ] as const;
