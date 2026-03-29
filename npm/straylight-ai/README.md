@@ -53,7 +53,8 @@ Any MCP-compatible AI coding assistant works. The MCP server speaks the standard
 
 | Command | Description |
 |---------|-------------|
-| `npx straylight-ai` | Full setup (pull, start, register) |
+| `npx straylight-ai` | Full setup (pull latest, start, register) |
+| `npx straylight-ai upgrade` | Pull latest image and replace container (data preserved) |
 | `npx straylight-ai start` | Start the container |
 | `npx straylight-ai stop` | Stop the container |
 | `npx straylight-ai status` | Check health and service status |
