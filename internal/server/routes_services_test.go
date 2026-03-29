@@ -69,7 +69,7 @@ func newTestServer() (*server.Server, *services.Registry) {
 	reg := services.NewRegistry(vault)
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.5.0",
+		Version:       "1.0.0",
 		Registry:      reg,
 	})
 	return srv, reg
@@ -607,7 +607,7 @@ func TestListTemplates_ContentTypeIsJSON(t *testing.T) {
 func TestServicesEndpoints_WithNilRegistry_Return501(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "0.5.0",
+		Version:       "1.0.0",
 		// Registry is nil — stub mode
 	})
 

@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	version           = "0.5.0"
+	version           = "1.0.0"
 	defaultPort       = 9470
 	defaultConfigPath = config.DefaultConfigPath
 	defaultDataDir    = "/data"

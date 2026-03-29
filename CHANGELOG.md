@@ -7,6 +7,24 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-29
+
+### Changed
+- Split Dashboard and Services into separate pages: Dashboard shows live metrics, audit breakdown, and activity feed; Services is dedicated to credential management
+- Redesigned Help page with searchable content, quick nav, Key Concepts section, MCP tools reference, and collapsible FAQ
+- Updated npm README with v1.0.0 features, dashboard documentation, and corrected volume info
+
+### Added
+- Dashboard metrics: 8 live metric cards (system health, vault status, uptime, service count, API calls, exec calls, audit events, credential access)
+- Dashboard service status sidebar with direct links
+- Dashboard audit breakdown with per-event-type bar charts
+- Dashboard activity feed with event type badges and timestamps
+- API client functions for `/api/v1/audit/stats` and `/api/v1/audit/events`
+- Help page search filtering across all sections
+- Help page Key Concepts section (zero-knowledge proxy, MCP, OpenBao vault, templates, audit trail, dynamic credentials)
+- Help page MCP tools reference documenting all 7 tools
+- GitHub Actions updated to Node.js 24 runtime (checkout v6, setup-node v6, setup-go v6, buildx v4, login v4, build-push v7)
+
 ## [0.5.0] - 2026-03-28
 
 ### Added
