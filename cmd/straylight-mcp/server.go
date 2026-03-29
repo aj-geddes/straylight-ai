@@ -25,7 +25,7 @@ const mcpProtocolVersion = "2024-11-05"
 // Server name and version reported in the initialize response.
 const (
 	serverName    = "straylight-ai"
-	serverVersion = "1.0.0"
+	serverVersion = "1.0.1"
 )
 
 // JSONRPCRequest is a JSON-RPC 2.0 request message.
