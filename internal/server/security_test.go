@@ -20,7 +20,7 @@ import (
 func TestSecurityHeaders_PresentOnAllResponses(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -52,7 +52,7 @@ func TestSecurityHeaders_PresentOnAllResponses(t *testing.T) {
 func TestCORS_AllowsLocalhostOrigin(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 	})
 
 	origins := []string{
@@ -80,7 +80,7 @@ func TestCORS_AllowsLocalhostOrigin(t *testing.T) {
 func TestCORS_BlocksNonLocalhostOrigin(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -99,7 +99,7 @@ func TestCORS_BlocksNonLocalhostOrigin(t *testing.T) {
 func TestCORS_Preflight_Returns200(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 	})
 
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/health", nil)
@@ -128,7 +128,7 @@ func TestRateLimiter_Returns429WhenExceeded(t *testing.T) {
 	// Use VaultStatus=unsealed so health endpoint returns 200 (not 503).
 	srv := server.NewWithOptions(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 		VaultStatus:   func() string { return "unsealed" },
 	}, server.Options{
 		RateLimit: 1,
@@ -161,7 +161,7 @@ func TestRateLimiter_Returns429WhenExceeded(t *testing.T) {
 func TestMaxBodySize_Returns413ForOversizedRequest(t *testing.T) {
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 	})
 
 	// Construct a body slightly over 1 MB.

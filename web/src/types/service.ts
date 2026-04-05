@@ -137,4 +137,5 @@ export interface AddServiceRequest {
   auth_method: string;
   credentials: Record<string, string>;
   name?: string;
+  target?: string;
 }

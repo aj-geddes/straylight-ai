@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	version           = "1.0.1"
+	version           = "1.0.3"
 	defaultPort       = 9470
 	defaultConfigPath = config.DefaultConfigPath
 	defaultDataDir    = "/data"
@@ -127,6 +127,9 @@ func newServeCmd() *cobra.Command {
 				return fmt.Errorf("serve: vault init: %w", err)
 			}
 			logger.Info("vault ready", "address", sup.Config().ListenAddr)
+
+			// Start background token renewal to prevent AppRole token expiry.
+			sup.StartTokenRenewal(ctx, vaultClient)
 
 			// --- Build component graph ---
 			registry := services.NewRegistry(vaultClient)

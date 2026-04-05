@@ -404,3 +404,57 @@ func TestListSecrets_EmptyResult(t *testing.T) {
 		t.Errorf("expected 0 keys for 404 (empty path), got %d", len(keys))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RenewSelfToken
+// ---------------------------------------------------------------------------
+
+// TestRenewSelfToken_Success verifies renewSelfToken returns the new TTL.
+func TestRenewSelfToken_Success(t *testing.T) {
+	srv := mockBaoServer(t, map[string]http.HandlerFunc{
+		"/v1/auth/token/renew-self": func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				t.Errorf("expected POST, got %s", r.Method)
+			}
+			jsonBody(t, w, http.StatusOK, map[string]interface{}{
+				"auth": map[string]interface{}{
+					"client_token":   "s.renewed",
+					"lease_duration": 3600,
+					"renewable":      true,
+				},
+			})
+		},
+	})
+	defer srv.Close()
+
+	c := vault.NewClient(srv.URL)
+	c.SetToken("s.testtoken")
+
+	ttl, err := c.RenewSelfToken(3600)
+	if err != nil {
+		t.Fatalf("RenewSelfToken: %v", err)
+	}
+	if ttl != 3600 {
+		t.Errorf("expected TTL=3600, got %d", ttl)
+	}
+}
+
+// TestRenewSelfToken_Forbidden verifies renewSelfToken returns an error on 403.
+func TestRenewSelfToken_Forbidden(t *testing.T) {
+	srv := mockBaoServer(t, map[string]http.HandlerFunc{
+		"/v1/auth/token/renew-self": func(w http.ResponseWriter, r *http.Request) {
+			jsonBody(t, w, http.StatusForbidden, map[string]interface{}{
+				"errors": []string{"permission denied"},
+			})
+		},
+	})
+	defer srv.Close()
+
+	c := vault.NewClient(srv.URL)
+	c.SetToken("s.expired")
+
+	_, err := c.RenewSelfToken(3600)
+	if err == nil {
+		t.Fatal("expected error on 403, got nil")
+	}
+}

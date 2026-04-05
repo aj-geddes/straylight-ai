@@ -79,7 +79,7 @@ func newTestServerWithOAuth(t *testing.T) (*server.Server, *routesFakeVault) {
 	h := oauth.NewHandler(v, &routesFakeServiceUpdater{}, "http://localhost:9470")
 	srv := server.New(server.Config{
 		ListenAddress: "127.0.0.1:0",
-		Version:       "1.0.1",
+		Version:       "1.0.3",
 		OAuthHandler:  h,
 	})
 	return srv, v

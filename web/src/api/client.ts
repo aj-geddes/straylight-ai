@@ -112,6 +112,7 @@ export async function addServiceFromTemplate(data: AddServiceRequest): Promise<S
     template: data.template,
     auth_method: data.auth_method,
     credentials: data.credentials,
+    target: data.target,
   };
   return createService(request);
 }

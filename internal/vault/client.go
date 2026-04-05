@@ -228,6 +228,45 @@ func (c *Client) ListSecrets(path string) ([]string, error) {
 	return result.Data.Keys, nil
 }
 
+// renewSelfToken extends the TTL of the current token by calling
+// POST /v1/auth/token/renew-self. Returns the new TTL in seconds.
+func (c *Client) RenewSelfToken(increment int) (int, error) {
+	payload := map[string]interface{}{"increment": fmt.Sprintf("%ds", increment)}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("vault: marshal renew request: %w", err)
+	}
+
+	url := c.address + "/v1/auth/token/renew-self"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("vault: build renew request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeader(req)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("vault: renew self token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		msg := readErrorBody(resp.Body)
+		return 0, fmt.Errorf("vault: renew self token: status %d: %s", resp.StatusCode, msg)
+	}
+
+	var result struct {
+		Auth struct {
+			LeaseDuration int `json:"lease_duration"`
+		} `json:"auth"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("vault: decode renew response: %w", err)
+	}
+	return result.Auth.LeaseDuration, nil
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

@@ -100,6 +100,7 @@ export function AddServiceDialog({ templates, onSave, onClose }: AddServiceDialo
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [serviceName, setServiceName] = useState('');
+  const [targetUrl, setTargetUrl] = useState('');
 
   function handleTemplateSelect(template: ServiceTemplate) {
     setSelectedTemplate(template);
@@ -107,6 +108,7 @@ export function AddServiceDialog({ templates, onSave, onClose }: AddServiceDialo
     setFieldErrors({});
     setSaveError(null);
     setServiceName('');
+    setTargetUrl('');
 
     if (template.auth_methods.length === 1) {
       // Only one auth method: skip step 2
@@ -218,6 +220,26 @@ export function AddServiceDialog({ templates, onSave, onClose }: AddServiceDialo
       return;
     }
 
+    // Custom services require a target URL.
+    const isCustom = selectedTemplate.id === 'custom';
+    if (isCustom && !selectedTemplate.target) {
+      const url = targetUrl.trim();
+      if (!url) {
+        setFieldErrors((prev) => ({ ...prev, _target_url: 'Target URL is required' }));
+        return;
+      }
+      try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:') {
+          setFieldErrors((prev) => ({ ...prev, _target_url: 'Target URL must use https://' }));
+          return;
+        }
+      } catch {
+        setFieldErrors((prev) => ({ ...prev, _target_url: 'Target URL must be a valid URL with https://' }));
+        return;
+      }
+    }
+
     const errors = validateCredentials(method);
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
@@ -233,6 +255,7 @@ export function AddServiceDialog({ templates, onSave, onClose }: AddServiceDialo
         auth_method: selectedAuthId,
         credentials: { ...credentials },
         name: serviceName.trim() || selectedTemplate.id,
+        target: targetUrl.trim() || undefined,
       });
       // Clear sensitive data
       setCredentials({});
@@ -394,6 +417,52 @@ export function AddServiceDialog({ templates, onSave, onClose }: AddServiceDialo
                   </p>
                 )}
               </div>
+              {/* Target URL — shown for custom services that have no built-in target */}
+              {selectedTemplate.id === 'custom' && !selectedTemplate.target && (
+                <div className="mb-4">
+                  <label
+                    htmlFor="target-url-input"
+                    className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300"
+                  >
+                    Target URL
+                    <span className="ml-1 text-red-500" aria-hidden="true">*</span>
+                  </label>
+                  <input
+                    id="target-url-input"
+                    type="url"
+                    value={targetUrl}
+                    onChange={(e) => {
+                      setTargetUrl(e.target.value);
+                      if (fieldErrors._target_url) {
+                        setFieldErrors((prev) => {
+                          const next = { ...prev };
+                          delete next._target_url;
+                          return next;
+                        });
+                      }
+                    }}
+                    placeholder="https://api.example.com"
+                    className={[
+                      'w-full rounded-md border px-3 py-2 text-sm text-slate-900 transition-colors',
+                      'placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500',
+                      'dark:bg-slate-800 dark:text-slate-100 dark:placeholder:text-slate-500',
+                      fieldErrors._target_url
+                        ? 'border-red-400 focus:ring-red-400 dark:border-red-500'
+                        : 'border-slate-300 dark:border-slate-600',
+                    ].join(' ')}
+                  />
+                  {fieldErrors._target_url && (
+                    <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
+                      {fieldErrors._target_url}
+                    </p>
+                  )}
+                  {!fieldErrors._target_url && (
+                    <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                      The base URL of the API (must use https://)
+                    </p>
+                  )}
+                </div>
+              )}
               <CredentialForm
                 fields={currentAuthMethod.fields}
                 values={credentials}

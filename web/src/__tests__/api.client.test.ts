@@ -17,7 +17,7 @@ describe('API client - getHealth', () => {
       openbao: 'unsealed',
       services_count: 2,
       uptime_seconds: 120,
-      version: '1.0.1',
+      version: '1.0.3',
     };
 
     vi.mocked(fetch).mockResolvedValueOnce({
@@ -54,7 +54,7 @@ describe('API client - getHealth', () => {
       status: 'starting',
       services_count: 0,
       uptime_seconds: 5,
-      version: '1.0.1',
+      version: '1.0.3',
     };
 
     vi.mocked(fetch).mockResolvedValueOnce({

@@ -7,6 +7,17 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-04-04
+
+### Added
+- Background AppRole token renewal: vault tokens are now automatically renewed every 30 minutes with full re-login fallback, preventing credential write failures after token expiry
+- Target URL field for custom services: the Add Service wizard now prompts for the API base URL when configuring a custom service, with client-side https:// validation
+- Vault policy paths for `auth/token/renew-self` and `auth/token/lookup-self` to support token self-renewal
+
+### Fixed
+- Custom service creation failing with "target is required" error because the frontend never sent the target URL for custom templates
+- Vault 403 "permission denied" errors after ~1 hour uptime caused by expired AppRole tokens with no renewal mechanism
+
 ## [1.0.0] - 2026-03-29
 
 ### Changed

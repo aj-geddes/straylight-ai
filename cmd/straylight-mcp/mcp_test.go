@@ -26,7 +26,7 @@ func newMockContainer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, `{"status":"ok","openbao":"unsealed","services_count":2,"version":"1.0.1"}`)
+		fmt.Fprintln(w, `{"status":"ok","openbao":"unsealed","services_count":2,"version":"1.0.3"}`)
 	})
 
 	mux.HandleFunc("/api/v1/mcp/tool-list", func(w http.ResponseWriter, r *http.Request) {

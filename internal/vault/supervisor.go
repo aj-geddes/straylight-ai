@@ -84,6 +84,12 @@ path "sys/leases/lookup" {
 path "sys/mounts/database" {
   capabilities = ["create", "read", "update"]
 }
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
 `
 )
 
@@ -114,14 +120,19 @@ type initData struct {
 	SecretID   string `json:"secret_id"`
 }
 
+// tokenRenewalInterval is how often the background goroutine renews the
+// AppRole token. Set to half the token_ttl so we renew well before expiry.
+const tokenRenewalInterval = 30 * time.Minute
+
 // Supervisor manages the OpenBao child process and drives the full
 // initialization, unseal, and AppRole authentication flow.
 type Supervisor struct {
 	cfg    SupervisorConfig
 	logger *slog.Logger
 
-	mu      sync.Mutex
-	process *os.Process
+	mu       sync.Mutex
+	process  *os.Process
+	initInfo *initData
 }
 
 // NewSupervisor constructs a Supervisor with defaults applied for any zero-value
@@ -308,6 +319,12 @@ func (s *Supervisor) resumeFromInitFile(client *Client) (*Client, error) {
 	// Replace root token with AppRole token
 	client.SetToken(token)
 	s.logger.Info("vault: authenticated via AppRole")
+
+	// Store init data for token renewal re-login fallback.
+	s.mu.Lock()
+	s.initInfo = &init
+	s.mu.Unlock()
+
 	return client, nil
 }
 
@@ -384,6 +401,12 @@ func (s *Supervisor) runFullInit(client *Client) (*Client, error) {
 	// Discard root token from memory; use AppRole token going forward
 	client.SetToken(appToken)
 	s.logger.Info("vault: initialization complete, authenticated via AppRole")
+
+	// Store init data for token renewal re-login fallback.
+	s.mu.Lock()
+	s.initInfo = &init
+	s.mu.Unlock()
+
 	return client, nil
 }
 
@@ -523,6 +546,55 @@ func (s *Supervisor) appRoleLogin(client *Client, roleID, secretID string) (stri
 		return "", fmt.Errorf("AppRole login returned empty client_token")
 	}
 	return result.Auth.ClientToken, nil
+}
+
+// ---------------------------------------------------------------------------
+// Token renewal
+// ---------------------------------------------------------------------------
+
+// StartTokenRenewal launches a background goroutine that periodically renews
+// the AppRole token on client. If renewal fails (e.g. token already expired or
+// max TTL reached), it falls back to a full AppRole re-login using stored
+// credentials. The goroutine stops when ctx is cancelled.
+func (s *Supervisor) StartTokenRenewal(ctx context.Context, client *Client) {
+	go func() {
+		ticker := time.NewTicker(tokenRenewalInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				s.logger.Info("vault: token renewal stopped")
+				return
+			case <-ticker.C:
+				ttl, err := client.RenewSelfToken(3600) // request 1h extension
+				if err == nil {
+					s.logger.Info("vault: token renewed", "new_ttl_seconds", ttl)
+					continue
+				}
+
+				s.logger.Warn("vault: token renewal failed, attempting re-login", "error", err)
+
+				s.mu.Lock()
+				info := s.initInfo
+				s.mu.Unlock()
+
+				if info == nil {
+					s.logger.Error("vault: cannot re-login, no stored init data")
+					continue
+				}
+
+				token, loginErr := s.appRoleLogin(client, info.RoleID, info.SecretID)
+				if loginErr != nil {
+					s.logger.Error("vault: re-login failed", "error", loginErr)
+					continue
+				}
+
+				client.SetToken(token)
+				s.logger.Info("vault: re-authenticated via AppRole after renewal failure")
+			}
+		}
+	}()
 }
 
 // ---------------------------------------------------------------------------
