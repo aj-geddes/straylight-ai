@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -97,7 +98,9 @@ path "auth/token/lookup-self" {
 // Fields left at their zero value are replaced with sensible defaults when
 // NewSupervisor constructs the Supervisor.
 type SupervisorConfig struct {
-	// BinaryPath is the path to the bao binary. Default: /usr/local/bin/bao.
+	// BinaryPath is the path to the bao binary. When empty it is resolved (in
+	// order) from the STRAYLIGHT_BAO_BIN env var, a `bao` found on PATH, then
+	// /usr/local/bin/bao (the container image location). See resolveBinaryPath.
 	BinaryPath string
 
 	// HCLPath is the path to the OpenBao server configuration HCL file.
@@ -114,10 +117,10 @@ type SupervisorConfig struct {
 // initData is the structure persisted to init.json. It holds everything needed
 // to unseal and re-authenticate after a restart.
 type initData struct {
-	UnsealKey  string `json:"unseal_key"`
-	RootToken  string `json:"root_token"`
-	RoleID     string `json:"role_id"`
-	SecretID   string `json:"secret_id"`
+	UnsealKey string `json:"unseal_key"`
+	RootToken string `json:"root_token"`
+	RoleID    string `json:"role_id"`
+	SecretID  string `json:"secret_id"`
 }
 
 // tokenRenewalInterval is how often the background goroutine renews the
@@ -139,7 +142,7 @@ type Supervisor struct {
 // fields in cfg.
 func NewSupervisor(cfg SupervisorConfig) *Supervisor {
 	if cfg.BinaryPath == "" {
-		cfg.BinaryPath = defaultBinaryPath
+		cfg.BinaryPath = resolveBinaryPath()
 	}
 	if cfg.HCLPath == "" {
 		cfg.HCLPath = defaultHCLPath
@@ -159,6 +162,21 @@ func NewSupervisor(cfg SupervisorConfig) *Supervisor {
 // Config returns a copy of the supervisor's resolved configuration.
 func (s *Supervisor) Config() SupervisorConfig {
 	return s.cfg
+}
+
+// resolveBinaryPath determines where to find the OpenBao (`bao`) binary when the
+// caller does not set BinaryPath explicitly. It prefers the STRAYLIGHT_BAO_BIN
+// override, then a `bao` discovered on PATH (so a host-installed binary — e.g.
+// via Homebrew or a package manager — works for native/local runs), and finally
+// falls back to defaultBinaryPath, the location baked into the container image.
+func resolveBinaryPath() string {
+	if env := os.Getenv("STRAYLIGHT_BAO_BIN"); env != "" {
+		return env
+	}
+	if path, err := exec.LookPath("bao"); err == nil {
+		return path
+	}
+	return defaultBinaryPath
 }
 
 // WaitForReady polls the OpenBao health endpoint until it returns any HTTP
@@ -235,10 +253,57 @@ func (s *Supervisor) InitializeVault() (*Client, error) {
 	return s.runFullInit(client)
 }
 
+// ensureConfig guarantees an OpenBao server config exists at s.cfg.HCLPath. In
+// the container image the config is baked in at defaultHCLPath, so when that file
+// already exists this is a no-op. For native/local runs (where the container's
+// /etc path is absent) it generates an equivalent config under the data directory
+// — pointing the file storage backend at <dataDir>/openbao/storage and the
+// listener at the configured address — and repoints s.cfg.HCLPath at it.
+func (s *Supervisor) ensureConfig() error {
+	if _, err := os.Stat(s.cfg.HCLPath); err == nil {
+		return nil
+	}
+
+	openbaoDir := filepath.Dir(s.cfg.InitPath)
+	storagePath := filepath.Join(openbaoDir, "storage")
+	if err := os.MkdirAll(storagePath, 0o700); err != nil {
+		return fmt.Errorf("vault: create storage dir: %w", err)
+	}
+
+	addr := strings.TrimPrefix(strings.TrimPrefix(s.cfg.ListenAddr, "http://"), "https://")
+
+	hcl := fmt.Sprintf(`storage "file" {
+  path = %q
+}
+
+listener "tcp" {
+  address     = %q
+  tls_disable = true
+}
+
+disable_mlock = true
+api_addr      = %q
+ui            = false
+`, storagePath, addr, s.cfg.ListenAddr)
+
+	genPath := filepath.Join(openbaoDir, "openbao.hcl")
+	if err := os.WriteFile(genPath, []byte(hcl), 0o600); err != nil {
+		return fmt.Errorf("vault: write generated config: %w", err)
+	}
+
+	s.cfg.HCLPath = genPath
+	s.logger.Info("vault: generated OpenBao config for native run", "path", genPath, "storage", storagePath)
+	return nil
+}
+
 // Start launches the OpenBao binary as a child process and waits for it to
 // become ready. It does not perform initialization; call InitializeVault after.
 // Returns an error if the binary cannot be started.
 func (s *Supervisor) Start(ctx context.Context) error {
+	if err := s.ensureConfig(); err != nil {
+		return err
+	}
+
 	cmd := exec.CommandContext(ctx, s.cfg.BinaryPath, "server", "-config="+s.cfg.HCLPath)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
