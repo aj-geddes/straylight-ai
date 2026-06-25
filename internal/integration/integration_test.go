@@ -350,8 +350,8 @@ func TestFullMCPFlow(t *testing.T) {
 		if !ok {
 			t.Fatalf("'tools' is not an array: %T", toolsRaw)
 		}
-		if len(tools) != 4 {
-			t.Errorf("expected 4 tools, got %d", len(tools))
+		if len(tools) != 7 {
+			t.Errorf("expected 7 tools, got %d", len(tools))
 		}
 
 		// Verify expected tool names are present.
@@ -370,6 +370,9 @@ func TestFullMCPFlow(t *testing.T) {
 			"straylight_exec",
 			"straylight_check",
 			"straylight_services",
+			"straylight_db_query",
+			"straylight_scan",
+			"straylight_read_file",
 		}
 		for _, name := range expectedTools {
 			if !toolNames[name] {
