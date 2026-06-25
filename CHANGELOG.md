@@ -7,6 +7,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-25
+
+### Fixed
+- Native (non-container) execution of `straylight serve`: the server no longer assumes the container filesystem layout, so it boots on a host where OpenBao lives elsewhere (e.g. Apple Silicon, where Homebrew installs `bao` to `/opt/homebrew/bin`). The `bao` binary is resolved from `STRAYLIGHT_BAO_BIN`, then `PATH`, then `/usr/local/bin/bao`; and when the container's baked-in `/etc/straylight/openbao.hcl` is absent, an equivalent OpenBao config and storage directory are generated under the data directory. Container behavior is unchanged.
+- Integration test (`TestFullMCPFlow/Scenario4_ToolListing`) asserted 4 MCP tools when 7 are registered, breaking `go test -tags=integration`; it now expects all 7 (`api_call`, `exec`, `check`, `services`, `db_query`, `scan`, `read_file`).
+
 ## [1.0.3] - 2026-04-04
 
 ### Added
