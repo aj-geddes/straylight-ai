@@ -16,6 +16,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/cmdwrap"
 	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/firewall"
+	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/scanner"
 	"github.com/straylight-ai/straylight/internal/services"
@@ -166,7 +167,7 @@ var toolDefinitions = []ToolDefinition{
 		Description: "List all services configured in Straylight-AI and their capabilities. Use this to discover what services are available before making API calls or running commands.",
 		InputSchema: map[string]interface{}{
 			"type":                 "object",
-			"properties":          map[string]interface{}{},
+			"properties":           map[string]interface{}{},
 			"additionalProperties": false,
 		},
 	},
@@ -275,24 +276,24 @@ type servicesResponse struct {
 
 // knownDescriptions maps well-known target URL hostnames to human-friendly descriptions.
 var knownDescriptions = map[string]string{
-	"api.stripe.com":      "Stripe payment API",
-	"api.github.com":      "GitHub API",
-	"api.openai.com":      "OpenAI completions API",
-	"api.anthropic.com":   "Anthropic Claude API",
-	"slack.com":           "Slack messaging API",
-	"api.slack.com":       "Slack messaging API",
-	"api.linear.app":      "Linear project management API",
-	"api.notion.com":      "Notion workspace API",
-	"api.sendgrid.com":    "SendGrid email API",
-	"api.twilio.com":      "Twilio communications API",
-	"api.hubspot.com":     "HubSpot CRM API",
-	"api.airtable.com":    "Airtable database API",
-	"api.shopify.com":     "Shopify commerce API",
-	"api.atlassian.com":   "Atlassian API",
-	"api.zendesk.com":     "Zendesk support API",
-	"api.intercom.io":     "Intercom messaging API",
-	"api.pagerduty.com":   "PagerDuty alerting API",
-	"api.datadog.com":     "Datadog monitoring API",
+	"api.stripe.com":    "Stripe payment API",
+	"api.github.com":    "GitHub API",
+	"api.openai.com":    "OpenAI completions API",
+	"api.anthropic.com": "Anthropic Claude API",
+	"slack.com":         "Slack messaging API",
+	"api.slack.com":     "Slack messaging API",
+	"api.linear.app":    "Linear project management API",
+	"api.notion.com":    "Notion workspace API",
+	"api.sendgrid.com":  "SendGrid email API",
+	"api.twilio.com":    "Twilio communications API",
+	"api.hubspot.com":   "HubSpot CRM API",
+	"api.airtable.com":  "Airtable database API",
+	"api.shopify.com":   "Shopify commerce API",
+	"api.atlassian.com": "Atlassian API",
+	"api.zendesk.com":   "Zendesk support API",
+	"api.intercom.io":   "Intercom messaging API",
+	"api.pagerduty.com": "PagerDuty alerting API",
+	"api.datadog.com":   "Datadog monitoring API",
 }
 
 // serviceDescription returns a human-friendly description for the given service.
@@ -331,7 +332,18 @@ type FileReader interface {
 // When a non-nil AuditEmitter is provided, a tool_call event is emitted after
 // each tool invocation with the tool name, service name (when applicable),
 // and outcome ("success" or "error"). Credential values are never included.
-func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, s ServiceLister, sc DirectoryScanner, fr FileReader, db DBExecutor, exec CommandExecutor, a audit.Emitter) ToolCallResult {
+//
+// When a non-nil policy engine and resolver are provided, the per-service policy
+// is evaluated BEFORE any handler runs and BEFORE any credential is injected.
+// Denied calls return an isError result immediately and emit a policy_denied event.
+func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, s ServiceLister, sc DirectoryScanner, fr FileReader, db DBExecutor, exec CommandExecutor, a audit.Emitter, eng policy.Engine, pr PolicyResolver) ToolCallResult {
+	// Per-service policy gate: evaluate BEFORE dispatching to any handler.
+	if eng != nil && pr != nil {
+		if polResult := evaluatePolicyGate(req, eng, pr, a); polResult != nil {
+			return *polResult
+		}
+	}
+
 	var result ToolCallResult
 	switch req.Tool {
 	case "straylight_api_call":
@@ -382,6 +394,54 @@ func emitToolCallAuditEvent(a audit.Emitter, req ToolCallRequest, result ToolCal
 		Service: service,
 		Details: details,
 	})
+}
+
+// evaluatePolicyGate checks the per-service policy for the tool call.
+// Returns a non-nil *ToolCallResult on deny (caller must return it immediately).
+// Returns nil when the call is allowed or when no service is identified.
+// A policy_denied audit event is emitted on deny; credential values are never included.
+func evaluatePolicyGate(req ToolCallRequest, eng policy.Engine, pr PolicyResolver, a audit.Emitter) *ToolCallResult {
+	service, _ := stringArg(req.Arguments, "service")
+	if service == "" {
+		return nil // no service context; tools like straylight_scan are always allowed
+	}
+
+	pol := pr.PolicyFor(service)
+	// Populate the destination host from the service Target URL so the
+	// AllowedHosts dimension is evaluated against the actual target hostname
+	// rather than an empty string (ADR-011, seam 1 fix).
+	targetHost := pr.TargetHostFor(service)
+	method, _ := stringArg(req.Arguments, "method")
+	reqPath, _ := stringArg(req.Arguments, "path")
+
+	polReq := policy.Request{
+		Service: service,
+		Method:  method,
+		Path:    reqPath,
+		Host:    targetHost,
+		Tool:    req.Tool,
+	}
+
+	dec := eng.Evaluate(polReq, pol)
+	if dec.Allowed {
+		return nil
+	}
+
+	if a != nil {
+		a.Emit(audit.Event{
+			Type:    audit.EventPolicyDenied,
+			Tool:    req.Tool,
+			Service: service,
+			Details: map[string]string{
+				"method": method,
+				"path":   reqPath,
+				"reason": dec.Reason,
+			},
+		})
+	}
+
+	denied := errorResult("Error: blocked by policy: " + dec.Reason)
+	return &denied
 }
 
 // handleAPICall implements the straylight_api_call tool.
@@ -678,10 +738,10 @@ func handleReadFile(args map[string]interface{}, fr FileReader) ToolCallResult {
 
 	// Build a structured JSON response so callers can extract redaction metadata.
 	resp := map[string]interface{}{
-		"content":          result.Content,
-		"redactions":       result.Redactions,
+		"content":           result.Content,
+		"redactions":        result.Redactions,
 		"redacted_patterns": result.RedactedPatterns,
-		"file_size":        result.FileSize,
+		"file_size":         result.FileSize,
 	}
 	if result.Warning != "" {
 		resp["warning"] = result.Warning

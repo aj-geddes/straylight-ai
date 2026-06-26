@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,6 +23,8 @@ import (
 	"time"
 
 	"github.com/straylight-ai/straylight/internal/audit"
+	"github.com/straylight-ai/straylight/internal/egress"
+	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/services"
 )
 
@@ -31,6 +34,9 @@ const defaultCredentialTTL = 60 * time.Second
 // defaultTimeout is the per-request upstream timeout when the caller's context
 // has no deadline of its own.
 const defaultTimeout = 30 * time.Second
+
+// dialTimeout is the per-connection dial timeout for the guard transport.
+const dialTimeout = 10 * time.Second
 
 // ServiceResolver abstracts the service registry for the proxy package so that
 // the proxy does not depend directly on the services package implementation.
@@ -83,36 +89,131 @@ type cachedCredentials struct {
 	fetchedAt  time.Time
 }
 
+// egressPolicyCtxKey is the private context key used to thread the per-service
+// egress policy through the request into the DialContext.
+type egressPolicyCtxKey struct{}
+
+// egressAuditCtxKey is the private context key used to thread the audit emitter
+// into the DialContext so egress_denied events can be emitted without storing
+// mutable state in the transport closure.
+type egressAuditCtxKey struct{}
+
 // Proxy is a thread-safe HTTP reverse proxy that resolves service configuration,
 // injects credentials, and sanitizes responses.
 type Proxy struct {
-	resolver  ServiceResolver
-	sanitizer Sanitizer
-	client    *http.Client
-	injectors *InjectorRegistry
-	auditLog  audit.Emitter
+	resolver     ServiceResolver
+	sanitizer    Sanitizer
+	client       *http.Client
+	guard        egress.Guard
+	injectors    *InjectorRegistry
+	auditLog     audit.Emitter
+	policyEngine policy.Engine // may be nil; no policy re-check when unset
 
 	ttl        time.Duration
 	cache      sync.Map // key: service name (string) → *cachedCredential (legacy)
 	multiCache sync.Map // key: service name (string) → *cachedCredentials (new)
 }
 
-// NewProxy creates a Proxy with the default 60-second credential TTL.
+// NewProxy creates a Proxy with the default 60-second credential TTL and the
+// default egress guard (built-in SSRF denylist).
 // sanitizer may be nil; in that case response bodies are passed through unchanged.
 func NewProxy(resolver ServiceResolver, sanitizer Sanitizer) *Proxy {
-	return NewProxyWithTTL(resolver, sanitizer, defaultCredentialTTL)
+	return NewProxyWithGuard(resolver, sanitizer, egress.New())
 }
 
-// NewProxyWithTTL creates a Proxy with a configurable credential cache TTL.
-// A short TTL is useful in tests. sanitizer may be nil.
+// NewProxyWithGuard creates a Proxy with an explicit egress guard and the
+// default 60-second credential TTL. Use this constructor when a custom or
+// test-permissive guard is needed.
+func NewProxyWithGuard(resolver ServiceResolver, sanitizer Sanitizer, guard egress.Guard) *Proxy {
+	return NewProxyWithGuardTTL(resolver, sanitizer, guard, defaultCredentialTTL)
+}
+
+// NewProxyWithTTL creates a Proxy with a configurable credential cache TTL
+// and the default egress guard. A short TTL is useful in tests.
+// sanitizer may be nil.
 func NewProxyWithTTL(resolver ServiceResolver, sanitizer Sanitizer, ttl time.Duration) *Proxy {
+	return NewProxyWithGuardTTL(resolver, sanitizer, egress.New(), ttl)
+}
+
+// NewProxyWithGuardTTL is the canonical constructor: it accepts a guard, a TTL,
+// and builds the guarded http.Transport whose DialContext re-checks the resolved
+// IP for every connection (defeats DNS rebinding).
+func NewProxyWithGuardTTL(resolver ServiceResolver, sanitizer Sanitizer, g egress.Guard, ttl time.Duration) *Proxy {
+	dialer := &net.Dialer{Timeout: dialTimeout}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("egress: invalid address %q: %w", addr, err)
+			}
+
+			// Retrieve the per-request egress policy threaded via context.
+			egressPol := egress.Policy{}
+			if p, ok := ctx.Value(egressPolicyCtxKey{}).(egress.Policy); ok {
+				egressPol = p
+			}
+
+			// Resolve, then check EVERY candidate IP on the actual dial.
+			// This is the authoritative check that defeats DNS rebinding: we
+			// classify the IP the dialer actually connects to, not the name.
+			ips, resolveErr := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("egress: resolve %q: %w", host, resolveErr)
+			}
+
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("egress: no addresses resolved for %q", host)
+			}
+
+			// AllowHosts: if the original hostname is explicitly allowlisted by
+			// the operator, permit the connection without running the IP denylist.
+			// This honors the operator's explicit trust for internal services
+			// whose hostnames resolve to private ranges (ADR-010).
+			// DNS-rebinding defense remains intact for hosts NOT in AllowHosts —
+			// they still go through the per-IP denylist check below.
+			hostAllowed := false
+			for _, allowed := range egressPol.AllowHosts {
+				if host == allowed {
+					hostAllowed = true
+					break
+				}
+			}
+
+			if !hostAllowed {
+				for _, ipAddr := range ips {
+					if d := g.CheckIP(ipAddr.IP, egressPol); !d.Allowed {
+						// Thread an audit event when an emitter is available in ctx.
+						if auditEm, ok := ctx.Value(egressAuditCtxKey{}).(audit.Emitter); ok && auditEm != nil {
+							auditEm.Emit(audit.Event{
+								Type: audit.EventEgressDenied,
+								Details: map[string]string{
+									"host":   host,
+									"reason": d.Reason,
+								},
+							})
+						}
+						return nil, fmt.Errorf("egress denied: %s (%s)", host, d.Reason)
+					}
+				}
+			}
+
+			// Dial the first vetted IP directly, pinning to a checked address
+			// so the OS does not issue a second, unchecked resolution.
+			pinnedAddr := net.JoinHostPort(ips[0].IP.String(), port)
+			return dialer.DialContext(ctx, network, pinnedAddr)
+		},
+		ForceAttemptHTTP2: true,
+	}
+
 	return &Proxy{
 		resolver:  resolver,
 		sanitizer: sanitizer,
+		guard:     g,
 		injectors: DefaultInjectorRegistry(),
 		ttl:       ttl,
 		client: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout:   defaultTimeout,
+			Transport: transport,
 		},
 	}
 }
@@ -129,6 +230,7 @@ func (p *Proxy) InvalidateCache(name string) {
 // for use in tests where the upstream server uses a self-signed TLS certificate
 // (e.g. httptest.NewTLSServer). Pass httptest.Server.Client() to get an
 // http.Client pre-configured to trust the test server's certificate.
+// When SetHTTPClient is called, the guard transport is bypassed entirely.
 func (p *Proxy) SetHTTPClient(c *http.Client) {
 	p.client = c
 }
@@ -140,6 +242,13 @@ func (p *Proxy) SetHTTPClient(c *http.Client) {
 // SetAudit is safe to call before the proxy handles any requests.
 func (p *Proxy) SetAudit(a audit.Emitter) {
 	p.auditLog = a
+}
+
+// SetPolicy registers a policy engine on the proxy. When set, HandleAPICall
+// evaluates per-service policy BEFORE any credential is injected.
+// SetPolicy is safe to call before the proxy handles any requests.
+func (p *Proxy) SetPolicy(eng policy.Engine) {
+	p.policyEngine = eng
 }
 
 // HandleAPICall processes one straylight_api_call invocation.
@@ -156,6 +265,65 @@ func (p *Proxy) HandleAPICall(ctx context.Context, req APICallRequest) (*APICall
 	svc, err := p.resolver.Get(req.Service)
 	if err != nil {
 		return nil, fmt.Errorf("service %q not found", req.Service)
+	}
+
+	// Attach the per-service egress policy to the context so the DialContext
+	// can use it when checking resolved IPs (per ADR-010).
+	if svc.Egress != nil {
+		egressPol := egress.Policy{
+			AllowHosts:    svc.Egress.AllowHosts,
+			AllowCIDRs:    svc.Egress.AllowCIDRs,
+			AllowLoopback: svc.Egress.AllowLoopback,
+		}
+		ctx = context.WithValue(ctx, egressPolicyCtxKey{}, egressPol)
+	}
+
+	// Thread the audit emitter into the context so the DialContext can emit
+	// egress_denied events without storing mutable state in the transport closure.
+	if p.auditLog != nil {
+		ctx = context.WithValue(ctx, egressAuditCtxKey{}, p.auditLog)
+	}
+
+	// Extract the destination hostname from the service Target so the policy
+	// engine can evaluate AllowedHosts against it (ADR-011, seam 2).
+	// Populating Host here ensures matchHost receives the actual target hostname
+	// rather than an empty string, which would cause AllowedHosts to always deny.
+	targetHost := ""
+	if u, parseErr := url.Parse(svc.Target); parseErr == nil {
+		targetHost = u.Hostname()
+	}
+
+	// Authoritative pre-injection policy re-check (ADR-011, seam 2).
+	// Runs BEFORE any credential is fetched or attached, so a denied call
+	// never lends authority to an attacker-chosen request.
+	if p.policyEngine != nil && svc.Policy != nil {
+		toolPol := policy.Policy{
+			AllowedMethods:      svc.Policy.AllowedMethods,
+			AllowedPathPrefixes: svc.Policy.AllowedPathPrefixes,
+			AllowedHosts:        svc.Policy.AllowedHosts,
+		}
+		dec := p.policyEngine.Evaluate(policy.Request{
+			Service: req.Service,
+			Method:  strings.ToUpper(req.Method),
+			Path:    req.Path,
+			Host:    targetHost,
+			Tool:    "straylight_api_call",
+		}, toolPol)
+		if !dec.Allowed {
+			if p.auditLog != nil {
+				p.auditLog.Emit(audit.Event{
+					Type:    audit.EventPolicyDenied,
+					Service: req.Service,
+					Tool:    "straylight_api_call",
+					Details: map[string]string{
+						"method": req.Method,
+						"path":   req.Path,
+						"reason": dec.Reason,
+					},
+				})
+			}
+			return nil, fmt.Errorf("blocked by policy: %s", dec.Reason)
+		}
 	}
 
 	var upstreamReq *http.Request

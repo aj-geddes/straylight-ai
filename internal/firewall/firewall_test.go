@@ -633,3 +633,170 @@ func TestReadFileRedacted_TOMLPasswordRedacted(t *testing.T) {
 		t.Error("TOML host key should be preserved")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// BlockedDirs — directory-prefix blocking (RED tests — require BlockedDirs field)
+// ---------------------------------------------------------------------------
+
+// TestBlockedDir_InitJSONInsideBlockedDirBlocked verifies that reading a file
+// directly inside a blocked directory is denied.
+func TestBlockedDir_InitJSONInsideBlockedDirBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	openbaoDir := filepath.Join(tmpDir, "openbao")
+	if err := os.MkdirAll(openbaoDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll openbao: %v", err)
+	}
+	initJSON := writeTestFile(t, openbaoDir, "init.json", `{"unseal_keys":["secret"]}`)
+
+	fw := firewall.NewFirewall(firewall.FirewallConfig{
+		ProjectRoot: tmpDir,
+		BlockedDirs: []string{openbaoDir},
+	})
+
+	_, err := fw.ReadFileRedacted(initJSON)
+	if err == nil {
+		t.Fatal("expected error reading init.json inside blocked dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should contain 'blocked', got: %q", err.Error())
+	}
+}
+
+// TestBlockedDir_RaftDBInsideBlockedDirBlocked verifies that reading a file
+// nested inside a subdirectory of a blocked directory is also denied.
+func TestBlockedDir_RaftDBInsideBlockedDirBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	openbaoDir := filepath.Join(tmpDir, "openbao")
+	storageDir := filepath.Join(openbaoDir, "storage")
+	if err := os.MkdirAll(storageDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll storage: %v", err)
+	}
+	raftDB := writeTestFile(t, storageDir, "raft.db", "raft data")
+
+	fw := firewall.NewFirewall(firewall.FirewallConfig{
+		ProjectRoot: tmpDir,
+		BlockedDirs: []string{openbaoDir},
+	})
+
+	_, err := fw.ReadFileRedacted(raftDB)
+	if err == nil {
+		t.Fatal("expected error reading raft.db nested inside blocked dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should contain 'blocked', got: %q", err.Error())
+	}
+}
+
+// TestBlockedDir_DotDotTraversalBlocked verifies that a path using ".." to
+// navigate into a blocked directory is caught after path resolution.
+func TestBlockedDir_DotDotTraversalBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	openbaoDir := filepath.Join(tmpDir, "openbao")
+	if err := os.MkdirAll(openbaoDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll openbao: %v", err)
+	}
+	writeTestFile(t, openbaoDir, "init.json", `{"unseal_keys":["secret"]}`)
+
+	// Craft a traversal path: <tmpDir>/safe/../openbao/init.json
+	// Use os.PathSeparator to build an un-cleaned raw path so the firewall's
+	// own resolvePath (EvalSymlinks + Abs) must clean it before checking.
+	traversalPath := tmpDir + string(filepath.Separator) + "safe" +
+		string(filepath.Separator) + ".." +
+		string(filepath.Separator) + "openbao" +
+		string(filepath.Separator) + "init.json"
+
+	fw := firewall.NewFirewall(firewall.FirewallConfig{
+		ProjectRoot: tmpDir,
+		BlockedDirs: []string{openbaoDir},
+	})
+
+	_, err := fw.ReadFileRedacted(traversalPath)
+	if err == nil {
+		t.Fatal("expected error for dot-dot traversal into blocked dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should contain 'blocked', got: %q", err.Error())
+	}
+}
+
+// TestBlockedDir_SymlinkIntoBlockedDirBlocked verifies that a symlink whose
+// resolved target is inside a blocked directory is denied.
+func TestBlockedDir_SymlinkIntoBlockedDirBlocked(t *testing.T) {
+	tmpDir := t.TempDir()
+	openbaoDir := filepath.Join(tmpDir, "openbao")
+	if err := os.MkdirAll(openbaoDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll openbao: %v", err)
+	}
+	initJSON := writeTestFile(t, openbaoDir, "init.json", `{"unseal_keys":["secret"]}`)
+
+	linkPath := filepath.Join(tmpDir, "innocent.txt")
+	if err := os.Symlink(initJSON, linkPath); err != nil {
+		t.Skipf("cannot create symlink: %v", err)
+	}
+
+	fw := firewall.NewFirewall(firewall.FirewallConfig{
+		ProjectRoot: tmpDir,
+		BlockedDirs: []string{openbaoDir},
+	})
+
+	_, err := fw.ReadFileRedacted(linkPath)
+	if err == nil {
+		t.Fatal("expected error for symlink into blocked dir, got nil")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should contain 'blocked', got: %q", err.Error())
+	}
+}
+
+// TestBlockedDir_FileOutsideBlockedDirAllowed verifies that a normal file
+// outside all blocked directories is still readable.
+func TestBlockedDir_FileOutsideBlockedDirAllowed(t *testing.T) {
+	tmpDir := t.TempDir()
+	openbaoDir := filepath.Join(tmpDir, "openbao")
+	if err := os.MkdirAll(openbaoDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll openbao: %v", err)
+	}
+	allowed := writeTestFile(t, tmpDir, "allowed.txt", "safe content")
+
+	fw := firewall.NewFirewall(firewall.FirewallConfig{
+		ProjectRoot: tmpDir,
+		BlockedDirs: []string{openbaoDir},
+	})
+
+	result, err := fw.ReadFileRedacted(allowed)
+	if err != nil {
+		t.Fatalf("expected no error for file outside blocked dir, got: %v", err)
+	}
+	if result.Content != "safe content" {
+		t.Errorf("expected content %q, got %q", "safe content", result.Content)
+	}
+}
+
+// TestBlockedDir_BasenameBlockStillWorks verifies that the existing basename
+// blocking (e.g. credentials.json) still works when BlockedDirs is empty.
+func TestBlockedDir_BasenameBlockStillWorks(t *testing.T) {
+	tmpDir := t.TempDir()
+	creds := writeTestFile(t, tmpDir, "credentials.json", `{"key":"value"}`)
+
+	fw := firewall.NewFirewall(firewall.FirewallConfig{
+		ProjectRoot: tmpDir,
+		BlockedDirs: []string{}, // no dir blocks — basename block must fire
+	})
+
+	_, err := fw.ReadFileRedacted(creds)
+	if err == nil {
+		t.Fatal("expected error for credentials.json (basename block), got nil")
+	}
+	if !strings.Contains(err.Error(), "blocked") {
+		t.Errorf("error should contain 'blocked', got: %q", err.Error())
+	}
+}
+
+// TestDefaultConfig_BlockedDirsIsNil verifies that DefaultConfig leaves
+// BlockedDirs nil — the data-dir value is caller-supplied at runtime.
+func TestDefaultConfig_BlockedDirsIsNil(t *testing.T) {
+	cfg := firewall.DefaultConfig()
+	if len(cfg.BlockedDirs) != 0 {
+		t.Errorf("DefaultConfig().BlockedDirs should be empty; got %v", cfg.BlockedDirs)
+	}
+}

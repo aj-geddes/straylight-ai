@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/services"
 )
@@ -604,7 +605,7 @@ func TestProxy_LegacyHeaderInjection_StillWorks(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "legacy-token")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "legacy-svc",
 		Method:  "GET",
@@ -629,7 +630,7 @@ func TestProxy_LegacyQueryInjection_StillWorks(t *testing.T) {
 		QueryParam: "api_key",
 	}, "qparam-val")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "legacy-query",
 		Method:  "GET",
@@ -721,7 +722,7 @@ func TestProxy_NewAuthMethod_BearerHeader(t *testing.T) {
 		map[string]string{"token": "ghp_abcdef"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "new-bearer",
 		Method:  "GET",
@@ -750,7 +751,7 @@ func TestProxy_NewAuthMethod_BasicAuth(t *testing.T) {
 		map[string]string{"username": "alice", "password": "s3cr3t"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "new-basic",
 		Method:  "GET",
@@ -781,7 +782,7 @@ func TestProxy_NewAuthMethod_QueryParam(t *testing.T) {
 		map[string]string{"token": "AIzaSyXXXX"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "new-query",
 		Method:  "GET",
@@ -814,7 +815,7 @@ func TestProxy_NewAuthMethod_CustomHeader_Anthropic(t *testing.T) {
 		map[string]string{"token": "sk-ant-abc123"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "custom-hdr",
 		Method:  "GET",
@@ -844,7 +845,7 @@ func TestProxy_NewAuthMethod_CustomHeader_GitLab(t *testing.T) {
 		map[string]string{"token": "glpat-abc"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "gitlab-svc",
 		Method:  "GET",
@@ -873,7 +874,7 @@ func TestProxy_UnknownInjectionType_ReturnsError(t *testing.T) {
 		map[string]string{"token": "val"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	_, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "bad-method",
 		Method:  "GET",
@@ -908,7 +909,7 @@ func TestProxy_NewAuthMethod_LegacyVaultFormat_HeaderFallback(t *testing.T) {
 	r.multiCreds[svc.Name] = map[string]string{"value": "legacy-tok"}
 	r.creds[svc.Name] = "legacy-tok"
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "legacy-vault-svc",
 		Method:  "GET",
@@ -939,7 +940,7 @@ func TestProxy_NewAuthMethod_LegacyVaultFormat_QueryFallback(t *testing.T) {
 	r.multiCreds[svc.Name] = map[string]string{"value": "qval"}
 	r.creds[svc.Name] = "qval"
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "legacy-query-svc",
 		Method:  "GET",
@@ -971,7 +972,7 @@ func TestProxy_NewAuthMethod_LegacyVaultFormat_DefaultBearerFallback(t *testing.
 	r.multiCreds[svc.Name] = map[string]string{"value": "bear-tok"}
 	r.creds[svc.Name] = "bear-tok"
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	resp, err := p.HandleAPICall(testCtx(t), proxy.APICallRequest{
 		Service: "legacy-default-svc",
 		Method:  "GET",
@@ -1007,7 +1008,7 @@ func TestProxy_CredentialsCache_MultiField(t *testing.T) {
 		map[string]string{"token": "tok"},
 	)
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	ctx := testCtx(t)
 
 	for i := 0; i < 3; i++ {

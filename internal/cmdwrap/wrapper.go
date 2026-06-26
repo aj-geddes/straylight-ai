@@ -11,6 +11,13 @@
 //     metacharacters are treated as literal characters.
 //   - Both stdout and stderr are run through the sanitizer before being returned.
 //   - Output exceeding maxOutputBytes is truncated.
+//   - A best-effort egress pre-flight check (ADR-010) denies commands whose
+//     parseable URL arguments resolve to denied SSRF destinations.
+//
+// Residual risk (ADR-010 v1): the child process's own socket-level egress is
+// NOT mediated by this wrapper. Hosts not parseable from the command args (env-
+// driven endpoints, config files, follow-on connections) are not checked.
+// Container-level egress (nft/eBPF) is the tracked paydown for issue #9.
 //
 // Implemented in WP-2.1.
 package cmdwrap
@@ -21,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -28,6 +36,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/services"
 )
 
@@ -79,13 +88,22 @@ type Sanitizer interface {
 type Wrapper struct {
 	resolver  CredentialResolver
 	sanitizer Sanitizer
+	guard     egress.Guard
 }
 
-// NewWrapper creates a Wrapper using the given resolver and sanitizer.
+// NewWrapper creates a Wrapper using the given resolver and sanitizer with the
+// default egress guard (built-in SSRF denylist).
 func NewWrapper(resolver CredentialResolver, sanitizer Sanitizer) *Wrapper {
+	return NewWrapperWithGuard(resolver, sanitizer, egress.New())
+}
+
+// NewWrapperWithGuard creates a Wrapper with an explicit egress guard.
+// Use egress.AllowAll() in tests that do not need SSRF blocking.
+func NewWrapperWithGuard(resolver CredentialResolver, sanitizer Sanitizer, guard egress.Guard) *Wrapper {
 	return &Wrapper{
 		resolver:  resolver,
 		sanitizer: sanitizer,
+		guard:     guard,
 	}
 }
 
@@ -147,12 +165,12 @@ type ExecResponse struct {
 // sanitized, and returned in ExecResponse.
 //
 // Execute returns a non-nil error only for setup failures (unknown service,
-// missing credential, command not found, allowlist violation). Timeout and
-// non-zero exit codes are reported via ExecResponse.ExitCode without returning
-// an error.
+// missing credential, command not found, allowlist violation, egress denial).
+// Timeout and non-zero exit codes are reported via ExecResponse.ExitCode
+// without returning an error.
 func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
 	// Resolve service metadata — ensures the service exists.
-	_, err := w.resolver.Get(req.Service)
+	svc, err := w.resolver.Get(req.Service)
 	if err != nil {
 		return nil, fmt.Errorf("cmdwrap: %w", err)
 	}
@@ -190,6 +208,13 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 
 	// Enforce command allowlist.
 	if err := checkAllowlist(argv[0], req.Service, req.AllowedCommands); err != nil {
+		return nil, err
+	}
+
+	// Egress pre-flight: extract URL-shaped args and deny if any resolve to a
+	// blocked destination. This is best-effort (ADR-010 v1): only args that look
+	// like URLs are parsed; env-driven or config-driven targets are not checked.
+	if err := w.checkEgressPreflight(ctx, argv, svc); err != nil {
 		return nil, err
 	}
 
@@ -251,6 +276,52 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 		Stdout:   sanitizedStdout,
 		Stderr:   sanitizedStderr,
 	}, nil
+}
+
+// checkEgressPreflight extracts URL-shaped arguments from argv and applies the
+// egress guard's CheckHost to each. Returns an error if any destination is denied.
+// This is best-effort: only http/https URL args are parsed; other destinations
+// (flags like --host, config files, env vars) are not checked.
+func (w *Wrapper) checkEgressPreflight(ctx context.Context, argv []string, svc services.Service) error {
+	policy := egressPolicyFrom(svc.Egress)
+
+	for _, arg := range argv[1:] { // skip argv[0] (binary name)
+		host := extractHost(arg)
+		if host == "" {
+			continue
+		}
+		if d := w.guard.CheckHost(ctx, host, policy); !d.Allowed {
+			return fmt.Errorf("cmdwrap: egress denied for host %q: %s", host, d.Reason)
+		}
+	}
+	return nil
+}
+
+// extractHost parses an argument that looks like an http/https URL and returns
+// its hostname. Returns empty string if the arg is not a parseable URL.
+func extractHost(arg string) string {
+	lower := strings.ToLower(arg)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return ""
+	}
+	u, err := url.Parse(arg)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// egressPolicyFrom converts a *services.EgressPolicy to an egress.Policy.
+// Returns a zero Policy (default deny SSRF ranges, allow public) when nil.
+func egressPolicyFrom(ep *services.EgressPolicy) egress.Policy {
+	if ep == nil {
+		return egress.Policy{}
+	}
+	return egress.Policy{
+		AllowHosts:    ep.AllowHosts,
+		AllowCIDRs:    ep.AllowCIDRs,
+		AllowLoopback: ep.AllowLoopback,
+	}
 }
 
 // ---------------------------------------------------------------------------

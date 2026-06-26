@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/straylight-ai/straylight/internal/policy"
 )
 
 // serviceNamePattern matches valid service names: starts with lowercase letter,
@@ -46,9 +48,9 @@ type AccountInfo struct {
 // Service represents a configured external service integration.
 // Credential values are never stored here — they live in OpenBao only.
 type Service struct {
-	Name           string            `json:"name"                      yaml:"name"`
-	Type           string            `json:"type"                      yaml:"type"`
-	Target         string            `json:"target"                    yaml:"target"`
+	Name   string `json:"name"                      yaml:"name"`
+	Type   string `json:"type"                      yaml:"type"`
+	Target string `json:"target"                    yaml:"target"`
 	// AuthMethodID identifies which auth method from the service's template was
 	// selected at creation time. When empty, the service uses legacy injection
 	// behavior (flat Inject/HeaderName/HeaderTemplate fields).
@@ -61,6 +63,14 @@ type Service struct {
 	// ExecEnabled indicates whether this service supports credential-injected
 	// command execution via straylight_exec. Set by WP-2.1 (command wrapper).
 	ExecEnabled bool `json:"exec_enabled,omitempty" yaml:"exec_enabled,omitempty"`
+	// Egress is the per-service outbound allowlist applied by the egress guard.
+	// When nil, only the built-in SSRF denylist applies (public destinations
+	// allowed, metadata/private/link-local denied).
+	Egress *EgressPolicy `json:"egress,omitempty" yaml:"egress,omitempty"`
+	// Policy gates tool calls on HTTP method, path-prefix, and destination host.
+	// When nil, all requests are permitted (backward compatibility); within a
+	// configured dimension, only listed values are allowed (default-deny).
+	Policy *ToolPolicy `json:"policy,omitempty" yaml:"policy,omitempty"`
 	// Status is computed at runtime and never persisted to config.
 	Status    string    `json:"status"     yaml:"-"`
 	CreatedAt time.Time `json:"created_at" yaml:"-"`
@@ -68,6 +78,25 @@ type Service struct {
 	// AccountInfo holds identity information fetched from the service API after
 	// credential storage. Stored in memory only — never persisted to vault.
 	AccountInfo *AccountInfo `json:"account_info,omitempty" yaml:"-"`
+}
+
+// EgressPolicy is the persisted, declarative form of per-service egress controls.
+// It maps to egress.Policy at request time.
+type EgressPolicy struct {
+	AllowHosts    []string `json:"allow_hosts,omitempty"    yaml:"allow_hosts,omitempty"`
+	AllowCIDRs    []string `json:"allow_cidrs,omitempty"    yaml:"allow_cidrs,omitempty"`
+	AllowLoopback bool     `json:"allow_loopback,omitempty" yaml:"allow_loopback,omitempty"`
+}
+
+// ToolPolicy is the persisted, declarative form of per-service tool-call policy.
+// It maps to policy.Policy at request time.
+type ToolPolicy struct {
+	AllowedMethods []string `json:"allowed_methods,omitempty" yaml:"allowed_methods,omitempty"`
+	// AllowedPathPrefixes restricts calls to paths starting with one of these
+	// prefixes. Prefixes should include a trailing slash (e.g. "/v1/") so that
+	// "/v1" does not accidentally match a sibling path such as "/v1admin".
+	AllowedPathPrefixes []string `json:"allowed_path_prefixes,omitempty" yaml:"allowed_path_prefixes,omitempty"`
+	AllowedHosts        []string `json:"allowed_hosts,omitempty"         yaml:"allowed_hosts,omitempty"`
 }
 
 // VaultClient is the interface the Registry uses for credential storage.
@@ -404,6 +433,41 @@ func (r *Registry) SetAccountInfo(name string, info *AccountInfo) error {
 	return nil
 }
 
+// PolicyFor maps the service's persisted ToolPolicy to a policy.Policy for
+// evaluation. Returns a zero policy.Policy (allow-all) when the service has
+// no policy configured or does not exist.
+func (r *Registry) PolicyFor(name string) policy.Policy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	svc, ok := r.services[name]
+	if !ok || svc.Policy == nil {
+		return policy.Policy{}
+	}
+	return policy.Policy{
+		AllowedMethods:      svc.Policy.AllowedMethods,
+		AllowedPathPrefixes: svc.Policy.AllowedPathPrefixes,
+		AllowedHosts:        svc.Policy.AllowedHosts,
+	}
+}
+
+// TargetHostFor returns the hostname extracted from the service Target URL,
+// or "" when the service is not found, has no Target, or the URL cannot be parsed.
+// Used by the MCP policy gate to populate policy.Request.Host so that the
+// AllowedHosts dimension is evaluated against the actual destination (ADR-011).
+func (r *Registry) TargetHostFor(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	svc, ok := r.services[name]
+	if !ok || svc.Target == "" {
+		return ""
+	}
+	u, err := url.Parse(svc.Target)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -460,6 +524,12 @@ func (r *Registry) saveMetadata(svc Service) error {
 			data["default_headers"] = string(headerJSON)
 		}
 	}
+	if svc.Policy != nil {
+		policyJSON, err := json.Marshal(svc.Policy)
+		if err == nil {
+			data["policy"] = string(policyJSON)
+		}
+	}
 	return r.vault.WriteSecret(metadataPath(svc.Name), data)
 }
 
@@ -508,6 +578,13 @@ func (r *Registry) LoadFromVault() error {
 			var headers map[string]string
 			if json.Unmarshal([]byte(headerJSON), &headers) == nil {
 				svc.DefaultHeaders = headers
+			}
+		}
+
+		if policyJSON := getString(data, "policy"); policyJSON != "" {
+			var tp ToolPolicy
+			if json.Unmarshal([]byte(policyJSON), &tp) == nil {
+				svc.Policy = &tp
 			}
 		}
 
