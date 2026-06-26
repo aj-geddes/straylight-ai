@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/straylight-ai/straylight/internal/audit"
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/services"
 )
@@ -65,7 +66,7 @@ func newAuditProxy(t *testing.T, cap *captureEmitter, upstreamStatus int, upstre
 		cred: "test-token",
 	}
 
-	p := proxy.NewProxy(resolver, nil)
+	p := proxy.NewProxyWithGuard(resolver, nil, egress.AllowAll())
 	p.SetAudit(cap)
 	return p, upstream, cap
 }
@@ -235,7 +236,7 @@ func TestProxy_Audit_NoAuditEmitterDoesNotPanic(t *testing.T) {
 	}
 
 	// Proxy created without audit — SetAudit never called.
-	p := proxy.NewProxy(resolver, nil)
+	p := proxy.NewProxyWithGuard(resolver, nil, egress.AllowAll())
 
 	_, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "testsvc",

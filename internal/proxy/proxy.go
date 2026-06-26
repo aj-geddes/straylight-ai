@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/straylight-ai/straylight/internal/audit"
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/services"
 )
 
@@ -31,6 +33,9 @@ const defaultCredentialTTL = 60 * time.Second
 // defaultTimeout is the per-request upstream timeout when the caller's context
 // has no deadline of its own.
 const defaultTimeout = 30 * time.Second
+
+// dialTimeout is the per-connection dial timeout for the guard transport.
+const dialTimeout = 10 * time.Second
 
 // ServiceResolver abstracts the service registry for the proxy package so that
 // the proxy does not depend directly on the services package implementation.
@@ -83,12 +88,17 @@ type cachedCredentials struct {
 	fetchedAt  time.Time
 }
 
+// egressPolicyCtxKey is the private context key used to thread the per-service
+// egress policy through the request into the DialContext.
+type egressPolicyCtxKey struct{}
+
 // Proxy is a thread-safe HTTP reverse proxy that resolves service configuration,
 // injects credentials, and sanitizes responses.
 type Proxy struct {
 	resolver  ServiceResolver
 	sanitizer Sanitizer
 	client    *http.Client
+	guard     egress.Guard
 	injectors *InjectorRegistry
 	auditLog  audit.Emitter
 
@@ -97,22 +107,80 @@ type Proxy struct {
 	multiCache sync.Map // key: service name (string) → *cachedCredentials (new)
 }
 
-// NewProxy creates a Proxy with the default 60-second credential TTL.
+// NewProxy creates a Proxy with the default 60-second credential TTL and the
+// default egress guard (built-in SSRF denylist).
 // sanitizer may be nil; in that case response bodies are passed through unchanged.
 func NewProxy(resolver ServiceResolver, sanitizer Sanitizer) *Proxy {
-	return NewProxyWithTTL(resolver, sanitizer, defaultCredentialTTL)
+	return NewProxyWithGuard(resolver, sanitizer, egress.New())
 }
 
-// NewProxyWithTTL creates a Proxy with a configurable credential cache TTL.
-// A short TTL is useful in tests. sanitizer may be nil.
+// NewProxyWithGuard creates a Proxy with an explicit egress guard and the
+// default 60-second credential TTL. Use this constructor when a custom or
+// test-permissive guard is needed.
+func NewProxyWithGuard(resolver ServiceResolver, sanitizer Sanitizer, guard egress.Guard) *Proxy {
+	return NewProxyWithGuardTTL(resolver, sanitizer, guard, defaultCredentialTTL)
+}
+
+// NewProxyWithTTL creates a Proxy with a configurable credential cache TTL
+// and the default egress guard. A short TTL is useful in tests.
+// sanitizer may be nil.
 func NewProxyWithTTL(resolver ServiceResolver, sanitizer Sanitizer, ttl time.Duration) *Proxy {
+	return NewProxyWithGuardTTL(resolver, sanitizer, egress.New(), ttl)
+}
+
+// NewProxyWithGuardTTL is the canonical constructor: it accepts a guard, a TTL,
+// and builds the guarded http.Transport whose DialContext re-checks the resolved
+// IP for every connection (defeats DNS rebinding).
+func NewProxyWithGuardTTL(resolver ServiceResolver, sanitizer Sanitizer, g egress.Guard, ttl time.Duration) *Proxy {
+	dialer := &net.Dialer{Timeout: dialTimeout}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("egress: invalid address %q: %w", addr, err)
+			}
+
+			// Retrieve the per-request egress policy threaded via context.
+			policy := egress.Policy{}
+			if p, ok := ctx.Value(egressPolicyCtxKey{}).(egress.Policy); ok {
+				policy = p
+			}
+
+			// Resolve, then check EVERY candidate IP on the actual dial.
+			// This is the authoritative check that defeats DNS rebinding: we
+			// classify the IP the dialer actually connects to, not the name.
+			ips, resolveErr := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if resolveErr != nil {
+				return nil, fmt.Errorf("egress: resolve %q: %w", host, resolveErr)
+			}
+
+			for _, ipAddr := range ips {
+				if d := g.CheckIP(ipAddr.IP, policy); !d.Allowed {
+					return nil, fmt.Errorf("egress denied: %s (%s)", host, d.Reason)
+				}
+			}
+
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("egress: no addresses resolved for %q", host)
+			}
+
+			// Dial the first vetted IP directly, pinning to a checked address
+			// so the OS does not issue a second, unchecked resolution.
+			pinnedAddr := net.JoinHostPort(ips[0].IP.String(), port)
+			return dialer.DialContext(ctx, network, pinnedAddr)
+		},
+		ForceAttemptHTTP2: true,
+	}
+
 	return &Proxy{
 		resolver:  resolver,
 		sanitizer: sanitizer,
+		guard:     g,
 		injectors: DefaultInjectorRegistry(),
 		ttl:       ttl,
 		client: &http.Client{
-			Timeout: defaultTimeout,
+			Timeout:   defaultTimeout,
+			Transport: transport,
 		},
 	}
 }
@@ -129,6 +197,7 @@ func (p *Proxy) InvalidateCache(name string) {
 // for use in tests where the upstream server uses a self-signed TLS certificate
 // (e.g. httptest.NewTLSServer). Pass httptest.Server.Client() to get an
 // http.Client pre-configured to trust the test server's certificate.
+// When SetHTTPClient is called, the guard transport is bypassed entirely.
 func (p *Proxy) SetHTTPClient(c *http.Client) {
 	p.client = c
 }
@@ -156,6 +225,17 @@ func (p *Proxy) HandleAPICall(ctx context.Context, req APICallRequest) (*APICall
 	svc, err := p.resolver.Get(req.Service)
 	if err != nil {
 		return nil, fmt.Errorf("service %q not found", req.Service)
+	}
+
+	// Attach the per-service egress policy to the context so the DialContext
+	// can use it when checking resolved IPs (per ADR-010).
+	if svc.Egress != nil {
+		policy := egress.Policy{
+			AllowHosts:    svc.Egress.AllowHosts,
+			AllowCIDRs:    svc.Egress.AllowCIDRs,
+			AllowLoopback: svc.Egress.AllowLoopback,
+		}
+		ctx = context.WithValue(ctx, egressPolicyCtxKey{}, policy)
 	}
 
 	var upstreamReq *http.Request

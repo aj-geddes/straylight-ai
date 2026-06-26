@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/services"
 )
@@ -125,7 +126,7 @@ func upstreamEchoServer(t *testing.T) *httptest.Server {
 
 func TestNewProxy_NonNilResult(t *testing.T) {
 	r := newFakeResolver()
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	if p == nil {
 		t.Fatal("NewProxy returned nil")
 	}
@@ -148,7 +149,7 @@ func TestHandleAPICall_HeaderInjection_Bearer(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "sk-test-token")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "stripe",
@@ -195,7 +196,7 @@ func TestHandleAPICall_HeaderInjection_DefaultHeaderName(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "sk-openai-key")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "openai",
@@ -237,7 +238,7 @@ func TestHandleAPICall_HeaderInjection_CustomHeaderName(t *testing.T) {
 		HeaderTemplate: "{{.secret}}",
 	}, "my-raw-key")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "custom-api",
@@ -278,7 +279,7 @@ func TestHandleAPICall_QueryParamInjection(t *testing.T) {
 		QueryParam: "api_key",
 	}, "weather-secret-key")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "weather-api",
@@ -324,7 +325,7 @@ func TestHandleAPICall_DefaultHeaders(t *testing.T) {
 		},
 	}, "ghp_token")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "github",
@@ -368,7 +369,7 @@ func TestHandleAPICall_CallerHeadersForwarded(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "sk-real")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "stripe",
@@ -419,7 +420,7 @@ func TestCredentialCaching_SecondRequestDoesNotCallResolver(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "sk-cached")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	ctx := context.Background()
 
 	// First call.
@@ -453,7 +454,7 @@ func TestCacheInvalidation(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "sk-v1")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	ctx := context.Background()
 
 	if _, err := p.HandleAPICall(ctx, proxy.APICallRequest{Service: "stripe", Method: "GET", Path: "/v1/a"}); err != nil {
@@ -499,7 +500,7 @@ func TestHandleAPICall_SanitizerApplied(t *testing.T) {
 	}, "tok")
 
 	san := &fakeSanitizer{}
-	p := proxy.NewProxy(r, san)
+	p := proxy.NewProxyWithGuard(r, san, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "svc",
@@ -541,7 +542,7 @@ func TestHandleAPICall_NilSanitizerPassthrough(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "svc",
@@ -562,7 +563,7 @@ func TestHandleAPICall_NilSanitizerPassthrough(t *testing.T) {
 
 func TestHandleAPICall_UnknownService(t *testing.T) {
 	r := newFakeResolver()
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	_, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "ghost",
@@ -596,7 +597,7 @@ func TestHandleAPICall_MissingCredential(t *testing.T) {
 	// creds["svc"] intentionally absent
 	r.mu.Unlock()
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	_, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "svc",
@@ -626,7 +627,7 @@ func TestHandleAPICall_UpstreamUnreachable(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	_, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "deadend",
@@ -659,7 +660,7 @@ func TestHandleAPICall_UpstreamErrorPassthrough(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "bad-tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "svc",
@@ -699,7 +700,7 @@ func TestHandleAPICall_ContextTimeout(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -736,7 +737,7 @@ func TestHandleAPICall_ResponseHeadersReturned(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "svc",
@@ -768,7 +769,7 @@ func TestHandleAPICall_PostWithBody(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 
 	resp, err := p.HandleAPICall(context.Background(), proxy.APICallRequest{
 		Service: "api",
@@ -808,7 +809,7 @@ func TestHandleAPICall_ConcurrentRequests(t *testing.T) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "tok")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -852,7 +853,7 @@ func TestCredentialCache_TTLExpiry(t *testing.T) {
 	}, "tok")
 
 	// Use a proxy with a very short TTL for testing.
-	p := proxy.NewProxyWithTTL(r, nil, 50*time.Millisecond)
+	p := proxy.NewProxyWithGuardTTL(r, nil, egress.AllowAll(), 50*time.Millisecond)
 	ctx := context.Background()
 
 	if _, err := p.HandleAPICall(ctx, proxy.APICallRequest{Service: "svc", Method: "GET", Path: "/a"}); err != nil {
@@ -893,7 +894,7 @@ func BenchmarkHandleAPICall(b *testing.B) {
 		HeaderTemplate: "Bearer {{.secret}}",
 	}, "bench-token")
 
-	p := proxy.NewProxy(r, nil)
+	p := proxy.NewProxyWithGuard(r, nil, egress.AllowAll())
 	ctx := context.Background()
 
 	b.ResetTimer()

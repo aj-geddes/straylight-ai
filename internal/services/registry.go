@@ -46,9 +46,9 @@ type AccountInfo struct {
 // Service represents a configured external service integration.
 // Credential values are never stored here — they live in OpenBao only.
 type Service struct {
-	Name           string            `json:"name"                      yaml:"name"`
-	Type           string            `json:"type"                      yaml:"type"`
-	Target         string            `json:"target"                    yaml:"target"`
+	Name   string `json:"name"                      yaml:"name"`
+	Type   string `json:"type"                      yaml:"type"`
+	Target string `json:"target"                    yaml:"target"`
 	// AuthMethodID identifies which auth method from the service's template was
 	// selected at creation time. When empty, the service uses legacy injection
 	// behavior (flat Inject/HeaderName/HeaderTemplate fields).
@@ -61,6 +61,10 @@ type Service struct {
 	// ExecEnabled indicates whether this service supports credential-injected
 	// command execution via straylight_exec. Set by WP-2.1 (command wrapper).
 	ExecEnabled bool `json:"exec_enabled,omitempty" yaml:"exec_enabled,omitempty"`
+	// Egress is the per-service outbound allowlist applied by the egress guard.
+	// When nil, only the built-in SSRF denylist applies (public destinations
+	// allowed, metadata/private/link-local denied).
+	Egress *EgressPolicy `json:"egress,omitempty" yaml:"egress,omitempty"`
 	// Status is computed at runtime and never persisted to config.
 	Status    string    `json:"status"     yaml:"-"`
 	CreatedAt time.Time `json:"created_at" yaml:"-"`
@@ -68,6 +72,14 @@ type Service struct {
 	// AccountInfo holds identity information fetched from the service API after
 	// credential storage. Stored in memory only — never persisted to vault.
 	AccountInfo *AccountInfo `json:"account_info,omitempty" yaml:"-"`
+}
+
+// EgressPolicy is the persisted, declarative form of per-service egress controls.
+// It maps to egress.Policy at request time.
+type EgressPolicy struct {
+	AllowHosts    []string `json:"allow_hosts,omitempty"    yaml:"allow_hosts,omitempty"`
+	AllowCIDRs    []string `json:"allow_cidrs,omitempty"    yaml:"allow_cidrs,omitempty"`
+	AllowLoopback bool     `json:"allow_loopback,omitempty" yaml:"allow_loopback,omitempty"`
 }
 
 // VaultClient is the interface the Registry uses for credential storage.

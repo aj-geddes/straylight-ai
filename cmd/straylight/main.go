@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/straylight-ai/straylight/internal/config"
 	"github.com/straylight-ai/straylight/internal/datadir"
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/oauth"
 	"github.com/straylight-ai/straylight/internal/proxy"
@@ -151,8 +152,15 @@ func newServeCmd() *cobra.Command {
 			}
 
 			san := sanitizer.NewSanitizer()
-			p := proxy.NewProxy(registry, san)
+			guard := egress.New()                              // default-deny SSRF denylist (ADR-010)
+			p := proxy.NewProxyWithGuard(registry, san, guard) // proxy dialer re-checks the resolved IP
 			mcpHandler := mcp.NewHandler(p, registry)
+			// NOTE: straylight_exec is intentionally left UNWIRED here. cmdwrap.NewWrapperWithGuard
+			// exists and applies an egress pre-flight, but activating exec (SetCommandExecutor) is
+			// deferred to issue #14 and MUST land together with a command allowlist and filesystem
+			// scoping — otherwise the AI could read the OpenBao unseal key via the exec path
+			// (cat <dataDir>/openbao/init.json bypasses the URL-only egress check).
+			// See docs/security/THREAT-MODEL.md §4.
 
 			baseURL := fmt.Sprintf("http://localhost:%d", port)
 			oauthHandler := oauth.NewHandler(vaultClient, registry, baseURL)
