@@ -49,6 +49,9 @@ const (
 	EventLeaseRenewed EventType = "lease_renewed"
 	// EventLeaseExpired is emitted when a vault lease expires without renewal.
 	EventLeaseExpired EventType = "lease_expired"
+	// EventPolicyDenied is emitted when the policy engine denies a tool call
+	// before any credential is injected (ADR-011).
+	EventPolicyDenied EventType = "policy_denied"
 )
 
 // Event is a single audit log entry. ID and Timestamp are set automatically
@@ -91,10 +94,10 @@ const (
 // Emit is non-blocking: if the channel is full, the oldest event is dropped
 // and a dropped counter is incremented.
 type Logger struct {
-	dir      string
-	opts     Options
-	eventCh  chan Event
-	dropped  atomic.Int64
+	dir     string
+	opts    Options
+	eventCh chan Event
+	dropped atomic.Int64
 
 	ring     []Event
 	ringMu   sync.RWMutex

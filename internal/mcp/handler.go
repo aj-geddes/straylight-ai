@@ -10,6 +10,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/audit"
 	"github.com/straylight-ai/straylight/internal/cmdwrap"
 	"github.com/straylight-ai/straylight/internal/database"
+	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/scanner"
 )
 
@@ -34,15 +35,23 @@ type CommandExecutor interface {
 	Execute(ctx context.Context, req cmdwrap.ExecRequest) (*cmdwrap.ExecResponse, error)
 }
 
+// PolicyResolver provides per-service policy for the dispatch gate.
+// The canonical implementation is *services.Registry.
+type PolicyResolver interface {
+	PolicyFor(service string) policy.Policy
+}
+
 // Handler is the HTTP handler for the MCP tool forwarding endpoints.
 type Handler struct {
-	proxy       ProxyHandler
-	services    ServiceLister
-	auditLog    audit.Emitter
-	scanner     DirectoryScanner // may be nil; handleScan falls back gracefully
-	fileReader  FileReader       // may be nil; handleReadFile creates a default Firewall
-	dbExecutor  DBExecutor       // may be nil; straylight_db_query returns error when nil
-	cmdExecutor CommandExecutor  // may be nil; handleExec returns stub when nil
+	proxy          ProxyHandler
+	services       ServiceLister
+	auditLog       audit.Emitter
+	scanner        DirectoryScanner // may be nil; handleScan falls back gracefully
+	fileReader     FileReader       // may be nil; handleReadFile creates a default Firewall
+	dbExecutor     DBExecutor       // may be nil; straylight_db_query returns error when nil
+	cmdExecutor    CommandExecutor  // may be nil; handleExec returns stub when nil
+	policyEngine   policy.Engine    // may be nil; no policy gate when unset
+	policyResolver PolicyResolver   // may be nil; no policy gate when unset
 }
 
 // NewHandler creates a new Handler with the given proxy and service dependencies.
@@ -78,6 +87,14 @@ func (h *Handler) SetDBExecutor(db DBExecutor) {
 // the stub message for backward compatibility.
 func (h *Handler) SetCommandExecutor(exec CommandExecutor) {
 	h.cmdExecutor = exec
+}
+
+// SetPolicy registers a policy engine and resolver on the handler.
+// When both are non-nil, dispatchToolCall evaluates per-service policy
+// BEFORE dispatching to any credential-bearing handler.
+func (h *Handler) SetPolicy(eng policy.Engine, resolver PolicyResolver) {
+	h.policyEngine = eng
+	h.policyResolver = resolver
 }
 
 // ServeHTTP implements http.Handler for use in tests and integration.
@@ -118,7 +135,7 @@ func (h *Handler) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := dispatchToolCall(r.Context(), req, h.proxy, h.services, h.scanner, h.fileReader, h.dbExecutor, h.cmdExecutor, h.auditLog)
+	result := dispatchToolCall(r.Context(), req, h.proxy, h.services, h.scanner, h.fileReader, h.dbExecutor, h.cmdExecutor, h.auditLog, h.policyEngine, h.policyResolver)
 	writeJSON(w, http.StatusOK, result)
 }
 

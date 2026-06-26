@@ -24,6 +24,7 @@ import (
 
 	"github.com/straylight-ai/straylight/internal/audit"
 	"github.com/straylight-ai/straylight/internal/egress"
+	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/services"
 )
 
@@ -95,12 +96,13 @@ type egressPolicyCtxKey struct{}
 // Proxy is a thread-safe HTTP reverse proxy that resolves service configuration,
 // injects credentials, and sanitizes responses.
 type Proxy struct {
-	resolver  ServiceResolver
-	sanitizer Sanitizer
-	client    *http.Client
-	guard     egress.Guard
-	injectors *InjectorRegistry
-	auditLog  audit.Emitter
+	resolver     ServiceResolver
+	sanitizer    Sanitizer
+	client       *http.Client
+	guard        egress.Guard
+	injectors    *InjectorRegistry
+	auditLog     audit.Emitter
+	policyEngine policy.Engine // may be nil; no policy re-check when unset
 
 	ttl        time.Duration
 	cache      sync.Map // key: service name (string) → *cachedCredential (legacy)
@@ -211,6 +213,13 @@ func (p *Proxy) SetAudit(a audit.Emitter) {
 	p.auditLog = a
 }
 
+// SetPolicy registers a policy engine on the proxy. When set, HandleAPICall
+// evaluates per-service policy BEFORE any credential is injected.
+// SetPolicy is safe to call before the proxy handles any requests.
+func (p *Proxy) SetPolicy(eng policy.Engine) {
+	p.policyEngine = eng
+}
+
 // HandleAPICall processes one straylight_api_call invocation.
 // It resolves the service, fetches (and caches) the credential, builds an
 // upstream HTTP request, forwards it, and returns the sanitized response.
@@ -230,12 +239,44 @@ func (p *Proxy) HandleAPICall(ctx context.Context, req APICallRequest) (*APICall
 	// Attach the per-service egress policy to the context so the DialContext
 	// can use it when checking resolved IPs (per ADR-010).
 	if svc.Egress != nil {
-		policy := egress.Policy{
+		egressPol := egress.Policy{
 			AllowHosts:    svc.Egress.AllowHosts,
 			AllowCIDRs:    svc.Egress.AllowCIDRs,
 			AllowLoopback: svc.Egress.AllowLoopback,
 		}
-		ctx = context.WithValue(ctx, egressPolicyCtxKey{}, policy)
+		ctx = context.WithValue(ctx, egressPolicyCtxKey{}, egressPol)
+	}
+
+	// Authoritative pre-injection policy re-check (ADR-011, seam 2).
+	// Runs BEFORE any credential is fetched or attached, so a denied call
+	// never lends authority to an attacker-chosen request.
+	if p.policyEngine != nil && svc.Policy != nil {
+		toolPol := policy.Policy{
+			AllowedMethods:      svc.Policy.AllowedMethods,
+			AllowedPathPrefixes: svc.Policy.AllowedPathPrefixes,
+			AllowedHosts:        svc.Policy.AllowedHosts,
+		}
+		dec := p.policyEngine.Evaluate(policy.Request{
+			Service: req.Service,
+			Method:  strings.ToUpper(req.Method),
+			Path:    req.Path,
+			Tool:    "straylight_api_call",
+		}, toolPol)
+		if !dec.Allowed {
+			if p.auditLog != nil {
+				p.auditLog.Emit(audit.Event{
+					Type:    audit.EventPolicyDenied,
+					Service: req.Service,
+					Tool:    "straylight_api_call",
+					Details: map[string]string{
+						"method": req.Method,
+						"path":   req.Path,
+						"reason": dec.Reason,
+					},
+				})
+			}
+			return nil, fmt.Errorf("blocked by policy: %s", dec.Reason)
+		}
 	}
 
 	var upstreamReq *http.Request

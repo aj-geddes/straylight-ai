@@ -23,6 +23,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/oauth"
+	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/sanitizer"
 	"github.com/straylight-ai/straylight/internal/server"
@@ -153,8 +154,11 @@ func newServeCmd() *cobra.Command {
 
 			san := sanitizer.NewSanitizer()
 			guard := egress.New()                              // default-deny SSRF denylist (ADR-010)
+			eng := policy.New()                                // per-service tool-call gate (ADR-011)
 			p := proxy.NewProxyWithGuard(registry, san, guard) // proxy dialer re-checks the resolved IP
+			p.SetPolicy(eng)                                   // pre-injection re-check at proxy seam
 			mcpHandler := mcp.NewHandler(p, registry)
+			mcpHandler.SetPolicy(eng, registry) // uniform dispatch gate at MCP seam
 			// NOTE: straylight_exec is intentionally left UNWIRED here. cmdwrap.NewWrapperWithGuard
 			// exists and applies an egress pre-flight, but activating exec (SetCommandExecutor) is
 			// deferred to issue #14 and MUST land together with a command allowlist and filesystem

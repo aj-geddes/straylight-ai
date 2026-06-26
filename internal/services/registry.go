@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/straylight-ai/straylight/internal/policy"
 )
 
 // serviceNamePattern matches valid service names: starts with lowercase letter,
@@ -65,6 +67,10 @@ type Service struct {
 	// When nil, only the built-in SSRF denylist applies (public destinations
 	// allowed, metadata/private/link-local denied).
 	Egress *EgressPolicy `json:"egress,omitempty" yaml:"egress,omitempty"`
+	// Policy gates tool calls on HTTP method, path-prefix, and destination host.
+	// When nil, all requests are permitted (backward compatibility); within a
+	// configured dimension, only listed values are allowed (default-deny).
+	Policy *ToolPolicy `json:"policy,omitempty" yaml:"policy,omitempty"`
 	// Status is computed at runtime and never persisted to config.
 	Status    string    `json:"status"     yaml:"-"`
 	CreatedAt time.Time `json:"created_at" yaml:"-"`
@@ -80,6 +86,14 @@ type EgressPolicy struct {
 	AllowHosts    []string `json:"allow_hosts,omitempty"    yaml:"allow_hosts,omitempty"`
 	AllowCIDRs    []string `json:"allow_cidrs,omitempty"    yaml:"allow_cidrs,omitempty"`
 	AllowLoopback bool     `json:"allow_loopback,omitempty" yaml:"allow_loopback,omitempty"`
+}
+
+// ToolPolicy is the persisted, declarative form of per-service tool-call policy.
+// It maps to policy.Policy at request time.
+type ToolPolicy struct {
+	AllowedMethods      []string `json:"allowed_methods,omitempty"       yaml:"allowed_methods,omitempty"`
+	AllowedPathPrefixes []string `json:"allowed_path_prefixes,omitempty" yaml:"allowed_path_prefixes,omitempty"`
+	AllowedHosts        []string `json:"allowed_hosts,omitempty"         yaml:"allowed_hosts,omitempty"`
 }
 
 // VaultClient is the interface the Registry uses for credential storage.
@@ -416,6 +430,23 @@ func (r *Registry) SetAccountInfo(name string, info *AccountInfo) error {
 	return nil
 }
 
+// PolicyFor maps the service's persisted ToolPolicy to a policy.Policy for
+// evaluation. Returns a zero policy.Policy (allow-all) when the service has
+// no policy configured or does not exist.
+func (r *Registry) PolicyFor(name string) policy.Policy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	svc, ok := r.services[name]
+	if !ok || svc.Policy == nil {
+		return policy.Policy{}
+	}
+	return policy.Policy{
+		AllowedMethods:      svc.Policy.AllowedMethods,
+		AllowedPathPrefixes: svc.Policy.AllowedPathPrefixes,
+		AllowedHosts:        svc.Policy.AllowedHosts,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -472,6 +503,12 @@ func (r *Registry) saveMetadata(svc Service) error {
 			data["default_headers"] = string(headerJSON)
 		}
 	}
+	if svc.Policy != nil {
+		policyJSON, err := json.Marshal(svc.Policy)
+		if err == nil {
+			data["policy"] = string(policyJSON)
+		}
+	}
 	return r.vault.WriteSecret(metadataPath(svc.Name), data)
 }
 
@@ -520,6 +557,13 @@ func (r *Registry) LoadFromVault() error {
 			var headers map[string]string
 			if json.Unmarshal([]byte(headerJSON), &headers) == nil {
 				svc.DefaultHeaders = headers
+			}
+		}
+
+		if policyJSON := getString(data, "policy"); policyJSON != "" {
+			var tp ToolPolicy
+			if json.Unmarshal([]byte(policyJSON), &tp) == nil {
+				svc.Policy = &tp
 			}
 		}
 
