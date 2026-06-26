@@ -108,6 +108,8 @@ func (s *Sanitizer) Sanitize(input string) string {
 
 	result := applyValueMatching(input, values)
 	result = applyPatternMatching(result)
+	result = applyEncodedMatching(result)
+	result = applyEntropyMatching(result)
 	return result
 }
 
