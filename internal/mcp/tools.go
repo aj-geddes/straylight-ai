@@ -407,6 +407,10 @@ func evaluatePolicyGate(req ToolCallRequest, eng policy.Engine, pr PolicyResolve
 	}
 
 	pol := pr.PolicyFor(service)
+	// Populate the destination host from the service Target URL so the
+	// AllowedHosts dimension is evaluated against the actual target hostname
+	// rather than an empty string (ADR-011, seam 1 fix).
+	targetHost := pr.TargetHostFor(service)
 	method, _ := stringArg(req.Arguments, "method")
 	reqPath, _ := stringArg(req.Arguments, "path")
 
@@ -414,6 +418,7 @@ func evaluatePolicyGate(req ToolCallRequest, eng policy.Engine, pr PolicyResolve
 		Service: service,
 		Method:  method,
 		Path:    reqPath,
+		Host:    targetHost,
 		Tool:    req.Tool,
 	}
 

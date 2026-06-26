@@ -80,6 +80,7 @@ func New() Guard {
 			{mustParseCIDR("127.0.0.0/8"), "loopback IPv4"},
 			{mustParseCIDR("::1/128"), "loopback IPv6"},
 			{mustParseCIDR("0.0.0.0/8"), "unspecified address"},
+			{mustParseCIDR("::/128"), "unspecified IPv6 address"},
 		},
 	}
 }

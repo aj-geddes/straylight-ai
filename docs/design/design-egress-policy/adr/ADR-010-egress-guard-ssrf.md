@@ -275,9 +275,12 @@ check.
   ```
 - In `HandleAPICall`, after `p.resolver.Get(req.Service)`, derive the service's
   `egress.Policy` from `svc.Egress` (new Service field, below) and attach it to
-  `ctx` via `policyWithContext(ctx, policy)` before building/sending the request.
-  The pre-dial URL-host fast-filter (`guard.CheckHost`) runs here too, for an
-  early, clear error.
+  `ctx` via `context.WithValue(ctx, egressPolicyCtxKey{}, policy)` before
+  building/sending the request. **No pre-dial `CheckHost` call is made in
+  `HandleAPICall`**: the sole authoritative check is inside `DialContext`, which
+  resolves and classifies the IP the dialer actually connects to (defeating DNS
+  rebinding and covering every redirect re-dial). This is consistent with the
+  implementation in `internal/proxy/proxy.go`.
 - `SetHTTPClient` is preserved for tests; additionally provide a constructor that
   accepts a permissive `egress.New()`-equivalent all-allow guard for unit tests
   that hit `httptest` loopback servers, OR set `AllowLoopback` in the test

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -49,6 +50,17 @@ func (m *mockServiceListWithPolicy) CheckCredential(_ string) (string, error) {
 }
 func (m *mockServiceListWithPolicy) PolicyFor(service string) policy.Policy {
 	return m.policies[service]
+}
+func (m *mockServiceListWithPolicy) TargetHostFor(service string) string {
+	for _, svc := range m.list {
+		if svc.Name == service {
+			u, err := url.Parse(svc.Target)
+			if err == nil {
+				return u.Hostname()
+			}
+		}
+	}
+	return ""
 }
 
 // auditCapture collects emitted audit events for assertions.

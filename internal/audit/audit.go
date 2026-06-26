@@ -52,6 +52,10 @@ const (
 	// EventPolicyDenied is emitted when the policy engine denies a tool call
 	// before any credential is injected (ADR-011).
 	EventPolicyDenied EventType = "policy_denied"
+	// EventEgressDenied is emitted when the proxy DialContext blocks an outbound
+	// connection to a denied host or IP. Details contain "host" and "reason" only —
+	// never a credential, token, or full URL path (ADR-010).
+	EventEgressDenied EventType = "egress_denied"
 )
 
 // Event is a single audit log entry. ID and Timestamp are set automatically

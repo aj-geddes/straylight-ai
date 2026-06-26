@@ -93,6 +93,11 @@ type cachedCredentials struct {
 // egress policy through the request into the DialContext.
 type egressPolicyCtxKey struct{}
 
+// egressAuditCtxKey is the private context key used to thread the audit emitter
+// into the DialContext so egress_denied events can be emitted without storing
+// mutable state in the transport closure.
+type egressAuditCtxKey struct{}
+
 // Proxy is a thread-safe HTTP reverse proxy that resolves service configuration,
 // injects credentials, and sanitizes responses.
 type Proxy struct {
@@ -143,9 +148,9 @@ func NewProxyWithGuardTTL(resolver ServiceResolver, sanitizer Sanitizer, g egres
 			}
 
 			// Retrieve the per-request egress policy threaded via context.
-			policy := egress.Policy{}
+			egressPol := egress.Policy{}
 			if p, ok := ctx.Value(egressPolicyCtxKey{}).(egress.Policy); ok {
-				policy = p
+				egressPol = p
 			}
 
 			// Resolve, then check EVERY candidate IP on the actual dial.
@@ -156,14 +161,40 @@ func NewProxyWithGuardTTL(resolver ServiceResolver, sanitizer Sanitizer, g egres
 				return nil, fmt.Errorf("egress: resolve %q: %w", host, resolveErr)
 			}
 
-			for _, ipAddr := range ips {
-				if d := g.CheckIP(ipAddr.IP, policy); !d.Allowed {
-					return nil, fmt.Errorf("egress denied: %s (%s)", host, d.Reason)
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("egress: no addresses resolved for %q", host)
+			}
+
+			// AllowHosts: if the original hostname is explicitly allowlisted by
+			// the operator, permit the connection without running the IP denylist.
+			// This honors the operator's explicit trust for internal services
+			// whose hostnames resolve to private ranges (ADR-010).
+			// DNS-rebinding defense remains intact for hosts NOT in AllowHosts —
+			// they still go through the per-IP denylist check below.
+			hostAllowed := false
+			for _, allowed := range egressPol.AllowHosts {
+				if host == allowed {
+					hostAllowed = true
+					break
 				}
 			}
 
-			if len(ips) == 0 {
-				return nil, fmt.Errorf("egress: no addresses resolved for %q", host)
+			if !hostAllowed {
+				for _, ipAddr := range ips {
+					if d := g.CheckIP(ipAddr.IP, egressPol); !d.Allowed {
+						// Thread an audit event when an emitter is available in ctx.
+						if auditEm, ok := ctx.Value(egressAuditCtxKey{}).(audit.Emitter); ok && auditEm != nil {
+							auditEm.Emit(audit.Event{
+								Type: audit.EventEgressDenied,
+								Details: map[string]string{
+									"host":   host,
+									"reason": d.Reason,
+								},
+							})
+						}
+						return nil, fmt.Errorf("egress denied: %s (%s)", host, d.Reason)
+					}
+				}
 			}
 
 			// Dial the first vetted IP directly, pinning to a checked address
@@ -247,6 +278,21 @@ func (p *Proxy) HandleAPICall(ctx context.Context, req APICallRequest) (*APICall
 		ctx = context.WithValue(ctx, egressPolicyCtxKey{}, egressPol)
 	}
 
+	// Thread the audit emitter into the context so the DialContext can emit
+	// egress_denied events without storing mutable state in the transport closure.
+	if p.auditLog != nil {
+		ctx = context.WithValue(ctx, egressAuditCtxKey{}, p.auditLog)
+	}
+
+	// Extract the destination hostname from the service Target so the policy
+	// engine can evaluate AllowedHosts against it (ADR-011, seam 2).
+	// Populating Host here ensures matchHost receives the actual target hostname
+	// rather than an empty string, which would cause AllowedHosts to always deny.
+	targetHost := ""
+	if u, parseErr := url.Parse(svc.Target); parseErr == nil {
+		targetHost = u.Hostname()
+	}
+
 	// Authoritative pre-injection policy re-check (ADR-011, seam 2).
 	// Runs BEFORE any credential is fetched or attached, so a denied call
 	// never lends authority to an attacker-chosen request.
@@ -260,6 +306,7 @@ func (p *Proxy) HandleAPICall(ctx context.Context, req APICallRequest) (*APICall
 			Service: req.Service,
 			Method:  strings.ToUpper(req.Method),
 			Path:    req.Path,
+			Host:    targetHost,
 			Tool:    "straylight_api_call",
 		}, toolPol)
 		if !dec.Allowed {

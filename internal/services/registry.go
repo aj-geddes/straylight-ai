@@ -91,7 +91,10 @@ type EgressPolicy struct {
 // ToolPolicy is the persisted, declarative form of per-service tool-call policy.
 // It maps to policy.Policy at request time.
 type ToolPolicy struct {
-	AllowedMethods      []string `json:"allowed_methods,omitempty"       yaml:"allowed_methods,omitempty"`
+	AllowedMethods []string `json:"allowed_methods,omitempty" yaml:"allowed_methods,omitempty"`
+	// AllowedPathPrefixes restricts calls to paths starting with one of these
+	// prefixes. Prefixes should include a trailing slash (e.g. "/v1/") so that
+	// "/v1" does not accidentally match a sibling path such as "/v1admin".
 	AllowedPathPrefixes []string `json:"allowed_path_prefixes,omitempty" yaml:"allowed_path_prefixes,omitempty"`
 	AllowedHosts        []string `json:"allowed_hosts,omitempty"         yaml:"allowed_hosts,omitempty"`
 }
@@ -445,6 +448,24 @@ func (r *Registry) PolicyFor(name string) policy.Policy {
 		AllowedPathPrefixes: svc.Policy.AllowedPathPrefixes,
 		AllowedHosts:        svc.Policy.AllowedHosts,
 	}
+}
+
+// TargetHostFor returns the hostname extracted from the service Target URL,
+// or "" when the service is not found, has no Target, or the URL cannot be parsed.
+// Used by the MCP policy gate to populate policy.Request.Host so that the
+// AllowedHosts dimension is evaluated against the actual destination (ADR-011).
+func (r *Registry) TargetHostFor(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	svc, ok := r.services[name]
+	if !ok || svc.Target == "" {
+		return ""
+	}
+	u, err := url.Parse(svc.Target)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // ---------------------------------------------------------------------------

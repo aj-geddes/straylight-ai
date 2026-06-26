@@ -121,6 +121,10 @@ the least machinery.
   evaluation is the authoritative one.
 - Path-prefix matching is coarse (no full glob/regex in v1). A service needing
   fine-grained rules waits for v2. Acceptable per "minimal v1".
+  **Note**: path prefixes should include a trailing slash (e.g. `/v1/`) to
+  prevent unintended matches against sibling paths (e.g. `/v1` would also match
+  `/v1admin`). This is a documentation convention; the matching semantics are not
+  changed in v1.
 
 **Risks**
 - *Policy bypass if a new tool is added but not gated.* **Mitigation**: the gate

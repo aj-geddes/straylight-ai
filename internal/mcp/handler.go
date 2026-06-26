@@ -35,10 +35,17 @@ type CommandExecutor interface {
 	Execute(ctx context.Context, req cmdwrap.ExecRequest) (*cmdwrap.ExecResponse, error)
 }
 
-// PolicyResolver provides per-service policy for the dispatch gate.
-// The canonical implementation is *services.Registry.
+// PolicyResolver provides per-service policy and destination metadata for the
+// dispatch gate. The canonical implementation is *services.Registry.
 type PolicyResolver interface {
+	// PolicyFor returns the per-service tool-call policy. Returns a zero
+	// policy.Policy (allow-all) when the service has no policy configured.
 	PolicyFor(service string) policy.Policy
+	// TargetHostFor returns the hostname extracted from the service Target URL.
+	// Returns "" when the service is not found or has no Target.
+	// Used by evaluatePolicyGate to populate policy.Request.Host so that
+	// the AllowedHosts dimension is evaluated correctly (ADR-011).
+	TargetHostFor(service string) string
 }
 
 // Handler is the HTTP handler for the MCP tool forwarding endpoints.
