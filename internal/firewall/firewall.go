@@ -24,6 +24,13 @@ const blockedFileMessage = "file %q is blocked by the Straylight sensitive-file 
 // or out-of-root access attempt is detected.
 const pathDeniedMessage = "access denied: path %q is outside the project root %q"
 
+// dirBlockedMessage is the template for the error returned when a path resolves
+// to inside a blocked directory.
+const dirBlockedMessage = "file %q is blocked by the Straylight sensitive-file firewall: " +
+	"path is inside a blocked directory %q. " +
+	"Store credentials in the Straylight vault and use straylight_read_file to access " +
+	"configuration files with secrets safely redacted."
+
 // FirewallConfig holds the configuration for a Firewall instance.
 type FirewallConfig struct {
 	// ProjectRoot is the directory the firewall is allowed to read from.
@@ -39,6 +46,15 @@ type FirewallConfig struct {
 	// StructuredKeyPatterns are key names in YAML, JSON, and TOML documents
 	// whose values should be redacted. Matching is case-insensitive.
 	StructuredKeyPatterns []string
+
+	// BlockedDirs are absolute directory paths whose entire subtree is blocked.
+	// Any file whose resolved absolute path is inside one of these directories
+	// (including via symlinks or dot-dot traversal) is fully blocked — reading
+	// it returns an error that guides the user to the Straylight vault.
+	//
+	// This field has no default value; the caller supplies the data-directory
+	// path at startup (e.g. filepath.Join(dataDir, "openbao")).
+	BlockedDirs []string
 
 	// MaxFileSize is the maximum file size (in bytes) the firewall will read.
 	// Files larger than this limit are truncated and a warning is included in
@@ -136,6 +152,26 @@ func (f *Firewall) IsBlockedFile(path string) bool {
 	return false
 }
 
+// checkBlockedDir returns an error if the resolved path is inside any of the
+// configured BlockedDirs. Path comparison is done against the fully-resolved
+// absolute path so that symlinks and dot-dot traversal cannot bypass the check.
+func (f *Firewall) checkBlockedDir(resolved string) error {
+	for _, dir := range f.cfg.BlockedDirs {
+		// Resolve the blocked-dir path too so it matches the form of resolved.
+		dirResolved, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			dirResolved = filepath.Clean(dir)
+		}
+		dirResolved, _ = filepath.Abs(dirResolved)
+
+		prefix := dirResolved + string(os.PathSeparator)
+		if strings.HasPrefix(resolved, prefix) || resolved == dirResolved {
+			return fmt.Errorf(dirBlockedMessage, filepath.Base(resolved), dir)
+		}
+	}
+	return nil
+}
+
 // ReadFileRedacted reads the file at path, applies secret redaction, and
 // returns the sanitised content together with redaction metadata.
 //
@@ -164,6 +200,11 @@ func (f *Firewall) ReadFileRedacted(path string) (*ReadResult, error) {
 			resolved != rootResolved {
 			return nil, fmt.Errorf(pathDeniedMessage, path, f.cfg.ProjectRoot)
 		}
+	}
+
+	// Block files whose resolved path is inside a blocked directory.
+	if err := f.checkBlockedDir(resolved); err != nil {
+		return nil, err
 	}
 
 	// Block files matching sensitive name patterns.
