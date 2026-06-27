@@ -23,6 +23,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/oauth"
+	"github.com/straylight-ai/straylight/internal/oidc"
 	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/sanitizer"
@@ -169,6 +170,12 @@ func newServeCmd() *cobra.Command {
 			baseURL := fmt.Sprintf("http://localhost:%d", port)
 			oauthHandler := oauth.NewHandler(vaultClient, registry, baseURL)
 
+			// ADR-012 Phase 1: configure OpenBao as OIDC trust root and build the
+			// public discovery document. The issuer URL is the server's public base URL.
+			// External reachability (ingress/tunnel) is a deployment concern.
+			issuerURL := baseURL
+			oidcDiscovery := buildOIDCDiscovery(logger, vaultClient, issuerURL, baseURL)
+
 			srv := server.New(server.Config{
 				ListenAddress: listenAddr,
 				Version:       version,
@@ -176,6 +183,7 @@ func newServeCmd() *cobra.Command {
 				Registry:      registry,
 				OAuthHandler:  oauthHandler,
 				MCPHandler:    mcpHandler,
+				OIDCDiscovery: oidcDiscovery,
 			})
 			return srv.Run()
 		},
@@ -268,5 +276,47 @@ func newVersionCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			_ = enc.Encode(info)
 		},
+	}
+}
+
+// buildOIDCDiscovery configures OpenBao as an OIDC trust root (ADR-012 Phase 1)
+// and builds the public OIDC discovery document for the server. Errors are
+// logged as warnings; the server will start with an empty JWKS on failure.
+// External reachability of the issuer is a deployment concern.
+func buildOIDCDiscovery(logger *slog.Logger, vaultClient *vault.Client, issuerURL, baseURL string) *oidc.Discovery {
+	if err := vaultClient.ConfigureIdentityIssuer(issuerURL); err != nil {
+		logger.Warn("failed to configure identity issuer", "error", err)
+	}
+
+	if err := vaultClient.CreateIdentityRole("straylight", []string{issuerURL}, "1h", nil); err != nil {
+		logger.Warn("failed to create identity role", "error", err)
+	}
+
+	jwks, err := vaultClient.FetchPublicJWKS()
+	if err != nil {
+		logger.Warn("failed to fetch public JWKS from vault", "error", err)
+		jwks = vault.JWKSet{}
+	}
+
+	oidcKeys := make([]oidc.JWKKey, 0, len(jwks.Keys))
+	for _, k := range jwks.Keys {
+		oidcKeys = append(oidcKeys, oidc.JWKKey{
+			Kty: k.Kty,
+			Kid: k.Kid,
+			Use: k.Use,
+			Alg: k.Alg,
+			N:   k.N,
+			E:   k.E,
+			Crv: k.Crv,
+			X:   k.X,
+			Y:   k.Y,
+		})
+	}
+
+	return &oidc.Discovery{
+		IssuerURL:     issuerURL,
+		JWKSURI:       baseURL + "/.well-known/jwks.json",
+		SupportedAlgs: []string{"RS256"},
+		Keys:          oidcKeys,
 	}
 }

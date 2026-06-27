@@ -105,6 +105,10 @@ func registerRoutes(s *Server) {
 		s.mux.HandleFunc("/api/v1/databases", s.handleNotImplemented)
 	}
 
+	// Public OIDC discovery endpoints (ADR-012 Phase 1).
+	// These are unauthenticated and not subject to the dashboard CORS restriction.
+	registerOIDCRoutes(s)
+
 	// Web UI — serve the embedded React SPA with SPA fallback routing.
 	// All non-API paths are handled here; unknown paths return index.html
 	// so that client-side routing (React Router) can take over.
@@ -179,12 +183,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 // credentials format with template + auth_method selection.
 type createServiceRequest struct {
 	// Service identity and configuration.
-	Name           string            `json:"name"`
-	Type           string            `json:"type"`
-	Target         string            `json:"target"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	Target string `json:"target"`
 	// Template-based creation (new format). When Template and AuthMethod are
 	// provided, the service type/target/inject are derived from the template.
-	Template       string            `json:"template,omitempty"`
+	Template string `json:"template,omitempty"`
 	// Legacy injection configuration fields.
 	Inject         string            `json:"inject"`
 	HeaderName     string            `json:"header_name,omitempty"`
@@ -192,12 +196,12 @@ type createServiceRequest struct {
 	QueryParam     string            `json:"query_param,omitempty"`
 	DefaultHeaders map[string]string `json:"default_headers,omitempty"`
 	// AuthMethod is the ID of the chosen auth method from the template.
-	AuthMethod     string            `json:"auth_method,omitempty"`
+	AuthMethod string `json:"auth_method,omitempty"`
 	// Credentials is the new multi-field credential map. If both Credentials
 	// and Credential are provided, Credentials takes precedence.
-	Credentials    map[string]string `json:"credentials,omitempty"`
+	Credentials map[string]string `json:"credentials,omitempty"`
 	// Credential is the legacy single-string credential field.
-	Credential     string            `json:"credential,omitempty"`
+	Credential string `json:"credential,omitempty"`
 }
 
 // updateServiceRequest is the JSON body for PUT /api/v1/services/{name}.
@@ -212,11 +216,11 @@ type updateServiceRequest struct {
 	QueryParam     string            `json:"query_param,omitempty"`
 	DefaultHeaders map[string]string `json:"default_headers,omitempty"`
 	// AuthMethod is the ID of the auth method being updated.
-	AuthMethod     string            `json:"auth_method,omitempty"`
+	AuthMethod string `json:"auth_method,omitempty"`
 	// Credentials is the new multi-field credential map.
-	Credentials    map[string]string `json:"credentials,omitempty"`
+	Credentials map[string]string `json:"credentials,omitempty"`
 	// Credential is the legacy single-string credential field.
-	Credential     string            `json:"credential,omitempty"`
+	Credential string `json:"credential,omitempty"`
 }
 
 // rotateCredentialRequest is the JSON body for POST /api/v1/services/{name}/rotate.
@@ -224,7 +228,7 @@ type rotateCredentialRequest struct {
 	// Credentials is the new multi-field credential map.
 	Credentials map[string]string `json:"credentials,omitempty"`
 	// Credential is the legacy single-string credential field.
-	Credential  string            `json:"credential,omitempty"`
+	Credential string `json:"credential,omitempty"`
 }
 
 // handleListServices responds to GET /api/v1/services.
