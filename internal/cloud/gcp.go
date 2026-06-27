@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/straylight-ai/straylight/internal/tokenexchange"
 )
 
 const (
@@ -27,12 +29,25 @@ type GCPProviderConfig struct {
 
 	// HTTPClient is an optional custom HTTP client. When nil, http.DefaultClient is used.
 	HTTPClient *http.Client
+
+	// Engine is the token-exchange engine for the keyless WIF path (ADR-012
+	// Phase 2). When nil, the keyless path cannot be selected even if
+	// GCPConfig.WebIdentity is set.
+	Engine *tokenexchange.Engine
 }
 
-// GCPProvider generates temporary GCP credentials using a service account JSON key.
+// GCPProvider generates temporary GCP credentials.
+// It supports two paths:
+//   - Static path (default): SA-JSON key exchange using service account credentials.
+//   - Keyless path (ADR-012): GCP Workload Identity Federation using an OpenBao
+//     OIDC identity token — no static SA keys required.
+//
+// The keyless path is selected when GCPConfig.WebIdentity is non-nil and an
+// Engine is configured. Otherwise the static SA-JSON path is used unchanged.
 type GCPProvider struct {
 	tokenEndpoint string // overridden in tests
 	httpClient    *http.Client
+	engine        *tokenexchange.Engine
 }
 
 // NewGCPProvider creates a GCPProvider with the given configuration.
@@ -44,6 +59,7 @@ func NewGCPProvider(cfg GCPProviderConfig) *GCPProvider {
 	return &GCPProvider{
 		tokenEndpoint: cfg.TokenEndpointOverride,
 		httpClient:    client,
+		engine:        cfg.Engine,
 	}
 }
 
@@ -62,6 +78,14 @@ func (p *GCPProvider) GenerateCredentials(ctx context.Context, cfg ServiceConfig
 
 	gcpCfg := cfg.GCP
 
+	// ── Keyless branch (ADR-012 Phase 2) ─────────────────────────────────────
+	// Active only when WebIdentity config is present AND an Engine is wired.
+	// SA JSON is not required for the keyless path.
+	if gcpCfg.WebIdentity != nil && p.engine != nil {
+		return p.generateKeylessCredentials(ctx, gcpCfg)
+	}
+
+	// ── Static branch (unchanged from pre-ADR-012) ─────────────────────────
 	if gcpCfg.ServiceAccountJSON == "" {
 		return nil, fmt.Errorf("cloud: gcp: service_account_json is required")
 	}
@@ -185,4 +209,32 @@ func (p *GCPProvider) fetchToken(ctx context.Context, saJSON, tokenURI string, s
 	}
 
 	return tokenResp.AccessToken, expiresIn, nil
+}
+
+// generateKeylessCredentials implements the ADR-012 Phase 2 keyless path for GCP.
+// It delegates to the token-exchange Engine, which calls the OpenBao identity
+// source for a proof token and then calls the GCPWIFAdapter to exchange it for
+// a federated access token via GCP STS Workload Identity Federation.
+func (p *GCPProvider) generateKeylessCredentials(ctx context.Context, gcpCfg *GCPConfig) (*Credentials, error) {
+	audience := gcpCfg.WebIdentity.Audience
+
+	in := tokenexchange.ExchangeInput{
+		Audience: audience,
+		Params: map[string]string{
+			"audience": audience,
+			"project":  gcpCfg.ProjectID,
+		},
+	}
+
+	exchanged, err := p.engine.Credential(ctx, audience, "gcp", in)
+	if err != nil {
+		return nil, fmt.Errorf("cloud: gcp: keyless wif exchange for audience %q: %w", audience, err)
+	}
+
+	return &Credentials{
+		EnvVars:   exchanged.EnvVars,
+		ExpiresAt: exchanged.ExpiresAt,
+		Provider:  "gcp",
+		Scope:     exchanged.Scope,
+	}, nil
 }

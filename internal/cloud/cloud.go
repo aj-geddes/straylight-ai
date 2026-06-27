@@ -93,9 +93,21 @@ type AWSConfig struct {
 	WebIdentity *AWSWebIdentityConfig
 }
 
+// GCPWebIdentityConfig holds the opt-in keyless configuration for GCP
+// Workload Identity Federation (ADR-012 Phase 2). When this block is present
+// in GCPConfig, the keyless WIF path is used; when absent, the existing static
+// service-account-JSON path is used unchanged (backward compatibility).
+type GCPWebIdentityConfig struct {
+	// Audience is the workload identity pool provider resource name forwarded
+	// to both the identity source and to GCP STS as the token exchange audience.
+	// Example: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider".
+	Audience string
+}
+
 // GCPConfig holds GCP-specific configuration for access token generation.
 type GCPConfig struct {
 	// ServiceAccountJSON is the content of the service account key JSON file.
+	// Required for the static SA-JSON path; unused when the keyless path is selected.
 	ServiceAccountJSON string
 
 	// ProjectID sets CLOUDSDK_CORE_PROJECT in the resulting env vars.
@@ -108,6 +120,10 @@ type GCPConfig struct {
 	// TokenLifetimeSecs is the requested token lifetime. Range: 0-43200.
 	// Zero defaults to 3600 (1 hour, the GCP default).
 	TokenLifetimeSecs int
+
+	// WebIdentity, when non-nil, opts in to the keyless WIF path (ADR-012
+	// Phase 2). When nil, the existing static SA-JSON path is used unchanged.
+	WebIdentity *GCPWebIdentityConfig
 }
 
 // AzureConfig holds Azure-specific configuration for client credentials token exchange.
