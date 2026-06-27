@@ -126,6 +126,27 @@ type GCPConfig struct {
 	WebIdentity *GCPWebIdentityConfig
 }
 
+// AzureWebIdentityConfig holds the opt-in keyless configuration for Azure
+// Federated Identity Credentials (ADR-012 Phase 2). When this block is present
+// in AzureConfig, the keyless FIC path is used; when absent, the existing static
+// client_secret path is used unchanged (backward compatibility).
+type AzureWebIdentityConfig struct {
+	// TenantID is the Azure AD tenant (directory) ID for the federated credential.
+	TenantID string
+
+	// ClientID is the application (client) ID registered with the federated
+	// credential (the workload identity).
+	ClientID string
+
+	// Audience is the token audience forwarded to the identity source and to
+	// Azure AD as the expected audience in the jwt-bearer client assertion.
+	// Typically "api://AzureADTokenExchange".
+	Audience string
+
+	// SubscriptionID is the Azure subscription ID for AZURE_SUBSCRIPTION_ID.
+	SubscriptionID string
+}
+
 // AzureConfig holds Azure-specific configuration for client credentials token exchange.
 type AzureConfig struct {
 	// TenantID is the Azure Active Directory tenant ID.
@@ -135,6 +156,7 @@ type AzureConfig struct {
 	ClientID string
 
 	// ClientSecret is the service principal secret. Never included in output env vars.
+	// Not required when the keyless FIC path is used (WebIdentity non-nil).
 	ClientSecret string
 
 	// SubscriptionID sets AZURE_SUBSCRIPTION_ID in the resulting env vars.
@@ -143,6 +165,10 @@ type AzureConfig struct {
 	// Scope is the token audience, e.g. "https://management.azure.com/.default".
 	// Defaults to "https://management.azure.com/.default".
 	Scope string
+
+	// WebIdentity, when non-nil, opts in to the keyless FIC path (ADR-012
+	// Phase 2). When nil, the existing static client_secret path is used unchanged.
+	WebIdentity *AzureWebIdentityConfig
 }
 
 // ---------------------------------------------------------------------------

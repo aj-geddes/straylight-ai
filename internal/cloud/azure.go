@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/straylight-ai/straylight/internal/tokenexchange"
 )
 
 const (
@@ -28,12 +30,25 @@ type AzureProviderConfig struct {
 
 	// HTTPClient is an optional custom HTTP client. When nil, http.DefaultClient is used.
 	HTTPClient *http.Client
+
+	// Engine is the token-exchange engine for the keyless FIC path (ADR-012
+	// Phase 2). When nil, the keyless path cannot be selected even if
+	// AzureConfig.WebIdentity is set.
+	Engine *tokenexchange.Engine
 }
 
-// AzureProvider generates temporary Azure credentials using client credentials flow.
+// AzureProvider generates temporary Azure credentials.
+// It supports two paths:
+//   - Static path (default): client_credentials flow using a client_secret from vault.
+//   - Keyless path (ADR-012): FIC jwt-bearer client assertion using an OpenBao
+//     OIDC identity token — no static client_secret required.
+//
+// The keyless path is selected when AzureConfig.WebIdentity is non-nil and an
+// Engine is configured. Otherwise the static client_secret path is used unchanged.
 type AzureProvider struct {
 	tokenEndpoint string
 	httpClient    *http.Client
+	engine        *tokenexchange.Engine
 }
 
 // NewAzureProvider creates an AzureProvider with the given configuration.
@@ -45,18 +60,24 @@ func NewAzureProvider(cfg AzureProviderConfig) *AzureProvider {
 	return &AzureProvider{
 		tokenEndpoint: cfg.TokenEndpointOverride,
 		httpClient:    client,
+		engine:        cfg.Engine,
 	}
 }
 
 // CloudType implements Provider.
 func (p *AzureProvider) CloudType() string { return "azure" }
 
-// GenerateCredentials obtains an Azure access token using the client credentials
-// flow and returns it as AZURE_ACCESS_TOKEN, along with AZURE_TENANT_ID and
+// GenerateCredentials obtains an Azure access token and returns it as
+// AZURE_ACCESS_TOKEN, AZURE_TENANT_ID, AZURE_CLIENT_ID, and optionally
 // AZURE_SUBSCRIPTION_ID environment variables.
 //
-// The client secret is never included in the returned Credentials struct — only
-// the short-lived access token is returned.
+// Branch logic (ADR-012 backward compat guarantee):
+//   - If cfg.Azure.WebIdentity is non-nil AND an Engine is configured → keyless
+//     path via FIC jwt-bearer client assertion (no static client_secret used).
+//   - Otherwise → existing static client_credentials path, UNCHANGED.
+//
+// The client secret used on the static path is never included in the returned
+// Credentials struct.
 func (p *AzureProvider) GenerateCredentials(ctx context.Context, cfg ServiceConfig) (*Credentials, error) {
 	if cfg.Azure == nil {
 		return nil, fmt.Errorf("cloud: azure config is required for engine %q", cfg.Engine)
@@ -64,6 +85,57 @@ func (p *AzureProvider) GenerateCredentials(ctx context.Context, cfg ServiceConf
 
 	azureCfg := cfg.Azure
 
+	// ── Keyless branch (ADR-012 Phase 2) ──────────────────────────────────
+	// Active only when WebIdentity config is present AND an Engine is wired.
+	// client_secret is not required for the keyless path.
+	if azureCfg.WebIdentity != nil && p.engine != nil {
+		return p.generateKeylessCredentials(ctx, azureCfg)
+	}
+
+	// ── Static branch (unchanged from pre-ADR-012) ─────────────────────────
+	return p.generateStaticCredentials(ctx, azureCfg)
+}
+
+// generateKeylessCredentials implements the ADR-012 Phase 2 keyless path for
+// Azure. It delegates to the token-exchange Engine, which calls the OpenBao
+// identity source for a proof token and then calls the AzureFICAdapter to
+// exchange it for a short-lived access token via the jwt-bearer assertion flow.
+func (p *AzureProvider) generateKeylessCredentials(ctx context.Context, azureCfg *AzureConfig) (*Credentials, error) {
+	wic := azureCfg.WebIdentity
+
+	scope := azureCfg.Scope
+	if scope == "" {
+		scope = azureDefaultScope
+	}
+
+	in := tokenexchange.ExchangeInput{
+		Audience: wic.Audience,
+		Params: map[string]string{
+			"tenant_id": wic.TenantID,
+			"client_id": wic.ClientID,
+			"scope":     scope,
+		},
+	}
+	if wic.SubscriptionID != "" {
+		in.Params["subscription_id"] = wic.SubscriptionID
+	}
+
+	exchanged, err := p.engine.Credential(ctx, wic.ClientID, "azure", in)
+	if err != nil {
+		return nil, fmt.Errorf("cloud: azure: keyless fic exchange for client %q: %w", wic.ClientID, err)
+	}
+
+	return &Credentials{
+		EnvVars:   exchanged.EnvVars,
+		ExpiresAt: exchanged.ExpiresAt,
+		Provider:  "azure",
+		Scope:     exchanged.Scope,
+	}, nil
+}
+
+// generateStaticCredentials is the existing pre-ADR-012 client_credentials path,
+// unchanged. The client_secret stored in vault is used to call Azure AD.
+func (p *AzureProvider) generateStaticCredentials(ctx context.Context, azureCfg *AzureConfig) (*Credentials, error) {
 	scope := azureCfg.Scope
 	if scope == "" {
 		scope = azureDefaultScope
