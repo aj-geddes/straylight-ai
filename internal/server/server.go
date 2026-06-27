@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/straylight-ai/straylight/internal/audit"
+	"github.com/straylight-ai/straylight/internal/cloud"
 	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/oauth"
 	"github.com/straylight-ai/straylight/internal/oidc"
@@ -71,6 +72,12 @@ type Config struct {
 	// /.well-known/jwks.json. These endpoints are unauthenticated by design.
 	// When nil, the well-known endpoints return 404.
 	OIDCDiscovery *oidc.Discovery
+
+	// CloudManager is the keyless cloud credential manager (ADR-012 Phase 2).
+	// When non-nil, it is available to route handlers that generate cloud
+	// credentials for services opting in to the keyless path. When nil, the
+	// cloud credential generation path is not available.
+	CloudManager *cloud.Manager
 }
 
 // Options holds optional tuning parameters for the server's security middleware.

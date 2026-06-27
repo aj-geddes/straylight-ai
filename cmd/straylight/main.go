@@ -30,6 +30,9 @@ import (
 	"github.com/straylight-ai/straylight/internal/server"
 	"github.com/straylight-ai/straylight/internal/services"
 	"github.com/straylight-ai/straylight/internal/vault"
+
+	"github.com/straylight-ai/straylight/internal/cloud"
+	"github.com/straylight-ai/straylight/internal/tokenexchange"
 )
 
 const (
@@ -176,6 +179,45 @@ func newServeCmd() *cobra.Command {
 			issuerURL := baseURL
 			oidcDiscovery := buildOIDCDiscovery(logger, vaultClient, issuerURL, baseURL)
 
+			// ADR-012 Phase 2: wire the token-exchange Engine + OpenBaoIdentitySource +
+			// three cloud ExchangeAdapters into the cloud Manager. The identity issuer
+			// must be configured (buildOIDCDiscovery above) before the Engine is used.
+			// Services opt in to the keyless path by setting a WebIdentity/WIF/FIC block
+			// in their ServiceConfig; services without that block use the static path.
+			//
+			// Real cloud clients (issue #10): AWS clients use the ambient credential
+			// chain (env vars, instance profiles, IMDS). The keyless path presents an
+			// OpenBao OIDC proof to the cloud STS instead of static admin keys. The
+			// static AWS path (no WebIdentity block) uses the same ambient caller.
+			// GCP and Azure clients post directly to their STS endpoints via HTTPS.
+			awsCallerDefault, awsCallerErr := cloud.NewAWSSTSCallerDefault(ctx, "")
+			if awsCallerErr != nil {
+				logger.Warn("failed to build default AWS STS caller; static+keyless AWS paths unavailable", "error", awsCallerErr)
+				awsCallerDefault = nil
+			}
+
+			var staticSTSClient cloud.STSClient
+			var awsWebIdentityClient tokenexchange.STSWebIdentityClient
+			if awsCallerDefault != nil {
+				staticSTSClient = cloud.NewAWSStaticSTSClientWithCaller(awsCallerDefault)
+				awsWebIdentityClient = cloud.NewAWSWebIdentitySTSClientWithCaller(awsCallerDefault)
+			} else {
+				staticSTSClient = &unavailableSTSClient{reason: "aws sts caller unavailable at startup (issue #14 tracks exec wiring)"}
+				awsWebIdentityClient = &unavailableSTSWebIdentityClient{reason: "aws sts caller unavailable at startup (issue #14 tracks exec wiring)"}
+			}
+
+			gcpSTSClient := cloud.NewGCPSTSClient(nil, "")
+			azureTokenClient := cloud.NewAzureHTTPTokenClient(nil, "")
+
+			cloudMgr := cloud.BuildKeylessCloudManager(
+				vaultClient,
+				"straylight",
+				awsWebIdentityClient,
+				gcpSTSClient,
+				azureTokenClient,
+				staticSTSClient,
+			)
+
 			srv := server.New(server.Config{
 				ListenAddress: listenAddr,
 				Version:       version,
@@ -184,6 +226,7 @@ func newServeCmd() *cobra.Command {
 				OAuthHandler:  oauthHandler,
 				MCPHandler:    mcpHandler,
 				OIDCDiscovery: oidcDiscovery,
+				CloudManager:  cloudMgr,
 			})
 			return srv.Run()
 		},
@@ -319,4 +362,38 @@ func buildOIDCDiscovery(logger *slog.Logger, vaultClient *vault.Client, issuerUR
 		SupportedAlgs: []string{"RS256"},
 		Keys:          oidcKeys,
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Minimal fallback cloud client stubs
+// ---------------------------------------------------------------------------
+//
+// These stubs are used when the ambient AWS credential chain is unavailable at
+// startup (e.g. no IAM role, no env vars). They return a clear structured error
+// instead of panicking. In normal deployments with instance profiles or env
+// credentials, the real SDK-backed clients above are used.
+//
+// NOTE: straylight_exec remains UNWIRED (see NOTE comment above); these stubs
+// are for the cloud Manager only and are not related to exec wiring (issue #14).
+
+// unavailableSTSWebIdentityClient satisfies tokenexchange.STSWebIdentityClient
+// when the AWS caller could not be initialized at startup.
+type unavailableSTSWebIdentityClient struct{ reason string }
+
+func (u *unavailableSTSWebIdentityClient) AssumeRoleWithWebIdentity(
+	_ context.Context,
+	_ tokenexchange.STSAssumeRoleWithWebIdentityInput,
+) (*tokenexchange.STSWebIdentityCredentials, error) {
+	return nil, fmt.Errorf("cloud: aws web-identity STS client not available: %s", u.reason)
+}
+
+// unavailableSTSClient satisfies cloud.STSClient when the AWS caller could not
+// be initialized at startup.
+type unavailableSTSClient struct{ reason string }
+
+func (u *unavailableSTSClient) AssumeRole(
+	_ context.Context,
+	_ cloud.STSAssumeRoleInput,
+) (*cloud.STSCredentials, error) {
+	return nil, fmt.Errorf("cloud: static aws STS client not available: %s", u.reason)
 }
