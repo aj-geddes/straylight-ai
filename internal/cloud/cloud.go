@@ -61,6 +61,16 @@ type ServiceConfig struct {
 	Azure *AzureConfig
 }
 
+// AWSWebIdentityConfig holds the opt-in keyless configuration for AWS
+// AssumeRoleWithWebIdentity (ADR-012 Phase 2). When this block is present in
+// AWSConfig, the keyless path is used; when absent, the static AssumeRole path
+// is used unchanged (backward compatibility).
+type AWSWebIdentityConfig struct {
+	// Audience is the token audience forwarded to the identity source and to
+	// STS as the WebIdentityToken audience. Typically "sts.amazonaws.com".
+	Audience string
+}
+
 // AWSConfig holds AWS-specific configuration for STS AssumeRole.
 type AWSConfig struct {
 	// RoleARN is the IAM role to assume, e.g. "arn:aws:iam::123456789012:role/StrayLightRole".
@@ -76,6 +86,11 @@ type AWSConfig struct {
 	// SessionPolicy is an optional inline IAM policy JSON to scope permissions
 	// below what the role allows. Empty means no further restriction.
 	SessionPolicy string
+
+	// WebIdentity, when non-nil, opts in to the keyless AssumeRoleWithWebIdentity
+	// path (ADR-012 Phase 2). When nil, the existing static AssumeRole path is
+	// used unchanged.
+	WebIdentity *AWSWebIdentityConfig
 }
 
 // GCPConfig holds GCP-specific configuration for access token generation.
@@ -128,7 +143,7 @@ type cacheEntry struct {
 // It is safe for concurrent use.
 type Manager struct {
 	mu        sync.RWMutex
-	providers map[string]Provider // keyed by cloud type ("aws", "gcp", "azure")
+	providers map[string]Provider    // keyed by cloud type ("aws", "gcp", "azure")
 	cache     map[string]*cacheEntry // keyed by service name
 }
 
