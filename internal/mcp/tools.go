@@ -39,6 +39,10 @@ type ProxyHandler interface {
 type ServiceLister interface {
 	List() []services.Service
 	CheckCredential(name string) (string, error)
+	// ExecEnabledFor reports whether the named service has ExecEnabled=true.
+	// Returns false when the service is not found. Used by handleExec to
+	// enforce the per-service opt-in gate before dispatching to the executor.
+	ExecEnabledFor(name string) bool
 }
 
 // ToolDefinition holds the name, description, and input schema for an MCP tool
@@ -353,7 +357,7 @@ func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, 
 	case "straylight_services":
 		result = handleServices(s)
 	case "straylight_exec":
-		result = handleExec(ctx, req.Arguments, exec)
+		result = handleExec(ctx, req.Arguments, exec, s)
 	case "straylight_scan":
 		result = handleScan(req.Arguments, sc)
 	case "straylight_read_file":
@@ -562,7 +566,11 @@ func handleServices(s ServiceLister) ToolCallResult {
 // handleExec implements the straylight_exec tool.
 // When exec is nil (no CommandExecutor configured), it returns the backward-compatible
 // stub message. Otherwise it dispatches to the real command wrapper.
-func handleExec(ctx context.Context, args map[string]interface{}, exec CommandExecutor) ToolCallResult {
+//
+// The ExecEnabled per-service gate (ADR-013 Part C.1) is evaluated BEFORE
+// dispatching to the executor so that services that have not explicitly opted
+// in to exec cannot be targeted regardless of the executor being wired.
+func handleExec(ctx context.Context, args map[string]interface{}, exec CommandExecutor, s ServiceLister) ToolCallResult {
 	if exec == nil {
 		return ToolCallResult{
 			Content: []ContentItem{{Type: "text", Text: execStubMessage}},
@@ -572,6 +580,12 @@ func handleExec(ctx context.Context, args map[string]interface{}, exec CommandEx
 	service, ok := stringArg(args, "service")
 	if !ok || service == "" {
 		return errorResult("Error: missing required argument 'service'")
+	}
+
+	// ADR-013 Part C.1: per-service exec opt-in gate. ExecEnabled defaults false.
+	// A service must explicitly set exec_enabled: true to use straylight_exec.
+	if !s.ExecEnabledFor(service) {
+		return errorResult(fmt.Sprintf("Error: exec is not enabled for service %q; set exec_enabled: true and a non-empty allowed_commands list in the service configuration", service))
 	}
 
 	command, ok := stringArg(args, "command")
@@ -878,8 +892,10 @@ func buildDriverDSN(cfg database.DatabaseConfig, username, password string) (dri
 	}
 }
 
-// executeQuery opens a database connection, executes a parameterized query,
-// scans all rows up to maxRows, and returns a QueryResult.
+// executeQuery opens a database connection, executes a parameterized query inside
+// a READ ONLY transaction, scans all rows up to maxRows, and returns a QueryResult.
+// The READ ONLY transaction is a defense-in-depth measure: even if the Vault role
+// grant allows only SELECT, the database engine enforces read-only mode independently.
 // The connection is closed before returning.
 func executeQuery(ctx context.Context, driverName, dsn, query string, params []interface{}, maxRows int) (*database.QueryResult, error) {
 	sqlDB, err := sql.Open(driverName, dsn)
@@ -892,6 +908,52 @@ func executeQuery(ctx context.Context, driverName, dsn, query string, params []i
 	sqlDB.SetMaxIdleConns(0)
 	sqlDB.SetConnMaxLifetime(30 * time.Second)
 
+	// Begin a READ ONLY transaction so the database engine enforces read-only mode
+	// independently of the Vault role grant. This prevents accidents or privilege
+	// escalation where the Vault role is misconfigured with write permissions.
+	tx, err := sqlDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		// Some engines (e.g. older MySQL) do not support the TxOptions.ReadOnly
+		// flag via the driver. Fall back to an explicit SET TRANSACTION statement.
+		tx2, err2 := sqlDB.BeginTx(ctx, nil)
+		if err2 != nil {
+			return nil, fmt.Errorf("begin tx: %w", err2)
+		}
+		if _, setErr := tx2.ExecContext(ctx, "SET TRANSACTION READ ONLY"); setErr != nil {
+			_ = tx2.Rollback()
+			// If SET TRANSACTION READ ONLY is unsupported (e.g. SQLite in tests),
+			// fall back to a regular read that relies on the Vault role grant alone.
+			return executeQueryDirect(ctx, sqlDB, query, params, maxRows)
+		}
+		tx = tx2
+	}
+	defer func() { _ = tx.Rollback() }() // no-op if already committed or query-only
+
+	rows, err := tx.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+
+	cols, data, err := database.ScanRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// READ ONLY transactions do not need a Commit for SELECT-only workloads;
+	// the deferred Rollback is a no-op because the tx was never written to.
+	// Enforce max_rows after scanning.
+	data = database.ApplyMaxRows(data, maxRows)
+
+	return &database.QueryResult{
+		Columns:  cols,
+		Rows:     data,
+		RowCount: len(data),
+	}, nil
+}
+
+// executeQueryDirect runs a query on the plain connection (no read-only tx).
+// Used as a fallback when the database engine does not support read-only transactions.
+func executeQueryDirect(ctx context.Context, sqlDB *sql.DB, query string, params []interface{}, maxRows int) (*database.QueryResult, error) {
 	rows, err := sqlDB.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -902,9 +964,7 @@ func executeQuery(ctx context.Context, driverName, dsn, query string, params []i
 		return nil, err
 	}
 
-	// Enforce max_rows after scanning.
 	data = database.ApplyMaxRows(data, maxRows)
-
 	return &database.QueryResult{
 		Columns:  cols,
 		Rows:     data,

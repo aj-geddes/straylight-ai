@@ -1,9 +1,10 @@
 // Package mcp_test: security fix tests.
 //
 // Covers:
-//   Issue 2 (HIGH)  — path traversal in handleScan and handleReadFile
-//   Issue 3 (HIGH)  — LeaseID / LeaseTTLSeconds exposed in dbQueryResponse
-//   Issue 4 (HIGH)  — no timeout bounds enforcement in handleExec
+//
+//	Issue 2 (HIGH)  — path traversal in handleScan and handleReadFile
+//	Issue 3 (HIGH)  — LeaseID / LeaseTTLSeconds exposed in dbQueryResponse
+//	Issue 4 (HIGH)  — no timeout bounds enforcement in handleExec
 package mcp_test
 
 import (
@@ -18,6 +19,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/scanner"
+	"github.com/straylight-ai/straylight/internal/services"
 )
 
 // ---------------------------------------------------------------------------
@@ -269,7 +271,9 @@ func (m *captureExecWrapper) Execute(_ context.Context, req cmdwrap.ExecRequest)
 // (or negative) is clamped to 1 on the server side.
 func TestHandleExec_TimeoutBelowMinEnforcedToOne(t *testing.T) {
 	cap := &captureExecWrapper{}
-	h := mcp.NewHandler(&mockProxy{}, &mockServices{})
+	h := mcp.NewHandler(&mockProxy{}, &mockServices{
+		list: []services.Service{{Name: "github", Type: "http_proxy", ExecEnabled: true, AllowedCommands: []string{"echo"}}},
+	})
 	h.SetCommandExecutor(cap)
 
 	doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
@@ -290,7 +294,9 @@ func TestHandleExec_TimeoutBelowMinEnforcedToOne(t *testing.T) {
 // above 300 is clamped to 300 on the server side.
 func TestHandleExec_TimeoutAboveMaxEnforcedTo300(t *testing.T) {
 	cap := &captureExecWrapper{}
-	h := mcp.NewHandler(&mockProxy{}, &mockServices{})
+	h := mcp.NewHandler(&mockProxy{}, &mockServices{
+		list: []services.Service{{Name: "github", Type: "http_proxy", ExecEnabled: true, AllowedCommands: []string{"echo"}}},
+	})
 	h.SetCommandExecutor(cap)
 
 	doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
@@ -310,7 +316,9 @@ func TestHandleExec_TimeoutAboveMaxEnforcedTo300(t *testing.T) {
 // TestHandleExec_TimeoutNegativeEnforcedToOne verifies negative values are clamped.
 func TestHandleExec_TimeoutNegativeEnforcedToOne(t *testing.T) {
 	cap := &captureExecWrapper{}
-	h := mcp.NewHandler(&mockProxy{}, &mockServices{})
+	h := mcp.NewHandler(&mockProxy{}, &mockServices{
+		list: []services.Service{{Name: "github", Type: "http_proxy", ExecEnabled: true, AllowedCommands: []string{"echo"}}},
+	})
 	h.SetCommandExecutor(cap)
 
 	doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
@@ -331,7 +339,9 @@ func TestHandleExec_TimeoutNegativeEnforcedToOne(t *testing.T) {
 // is not altered by the clamping logic.
 func TestHandleExec_ValidTimeoutPassedThrough(t *testing.T) {
 	cap := &captureExecWrapper{}
-	h := mcp.NewHandler(&mockProxy{}, &mockServices{})
+	h := mcp.NewHandler(&mockProxy{}, &mockServices{
+		list: []services.Service{{Name: "github", Type: "http_proxy", ExecEnabled: true, AllowedCommands: []string{"echo"}}},
+	})
 	h.SetCommandExecutor(cap)
 
 	doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{

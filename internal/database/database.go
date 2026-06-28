@@ -136,8 +136,8 @@ type VaultClient interface {
 // dbEntry stores a registered database configuration (without admin password)
 // and its associated lease manager entry.
 type dbEntry struct {
-	config    DatabaseConfig // AdminPassword is zeroed on store for safety
-	engine    string
+	config     DatabaseConfig // AdminPassword is zeroed on store for safety
+	engine     string
 	roleSuffix string // e.g., "ro" or "rw"
 }
 
@@ -147,11 +147,11 @@ type dbEntry struct {
 // The AI never sees passwords or connection strings — they exist only inside
 // Manager and are sourced from OpenBao lease data.
 type Manager struct {
-	mu       sync.RWMutex
-	vault    VaultClient
-	leases   *lease.Manager
-	dbs      map[string]dbEntry // key: service name
-	logger   *slog.Logger
+	mu     sync.RWMutex
+	vault  VaultClient
+	leases *lease.Manager
+	dbs    map[string]dbEntry // key: service name
+	logger *slog.Logger
 }
 
 // NewManager creates a Manager backed by the given VaultClient.
@@ -366,7 +366,9 @@ func BuildConnectionString(cfg DatabaseConfig, username, password string) string
 	case "postgresql":
 		sslMode := cfg.SSLMode
 		if sslMode == "" {
-			sslMode = "disable"
+			// Default to require for transport encryption. Set sslmode=disable
+			// explicitly in DatabaseConfig.SSLMode for local dev environments.
+			sslMode = "require"
 		}
 		return fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
 			cfg.Host, port, cfg.Database, username, password, sslMode)

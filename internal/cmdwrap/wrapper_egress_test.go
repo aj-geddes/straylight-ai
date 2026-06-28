@@ -26,16 +26,17 @@ func newEgressWrapper(guard egress.Guard, svcEgress *services.EgressPolicy) *cmd
 		credentials: map[string]string{"svc": "tok"},
 		svcs: map[string]services.Service{
 			"svc": {
-				Name:        "svc",
-				Type:        "http_proxy",
-				Target:      "https://example.com",
-				Inject:      "header",
-				ExecEnabled: true,
-				Egress:      svcEgress,
+				Name:            "svc",
+				Type:            "http_proxy",
+				Target:          "https://example.com",
+				Inject:          "header",
+				ExecEnabled:     true,
+				AllowedCommands: []string{"curl", "echo"},
+				Egress:          svcEgress,
 			},
 		},
 	}
-	return cmdwrap.NewWrapperWithGuard(resolver, &fakeSanitizer{}, guard)
+	return configureTestCredentials(cmdwrap.NewWrapperWithGuard(resolver, &fakeSanitizer{}, guard))
 }
 
 // ---------------------------------------------------------------------------

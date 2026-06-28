@@ -375,7 +375,7 @@ func TestMCPHandler_AcceptsAuditLoggerInterface(t *testing.T) {
 	h.SetAudit(logger) // Logger must satisfy audit.Emitter
 
 	doRequest(h, http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
-		"tool": "straylight_services",
+		"tool":      "straylight_services",
 		"arguments": map[string]interface{}{},
 	})
 

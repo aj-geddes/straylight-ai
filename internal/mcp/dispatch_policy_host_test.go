@@ -31,6 +31,7 @@ type policyHostResolver struct {
 
 func (r *policyHostResolver) List() []services.Service                 { return []services.Service{r.svc} }
 func (r *policyHostResolver) CheckCredential(_ string) (string, error) { return "available", nil }
+func (r *policyHostResolver) ExecEnabledFor(_ string) bool             { return false }
 func (r *policyHostResolver) PolicyFor(_ string) policy.Policy         { return r.pol }
 func (r *policyHostResolver) TargetHostFor(_ string) string {
 	u, err := url.Parse(r.svc.Target)

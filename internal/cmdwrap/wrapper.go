@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -83,12 +84,47 @@ type Sanitizer interface {
 	Sanitize(input string) string
 }
 
+// Approver gates straylight_exec commands behind a human-in-the-loop decision
+// (ADR-013 Part A, Option A5). Await blocks until the operator approves or
+// denies the request, or until ctx is cancelled.
+//
+// A nil Approver causes Execute to fail closed (deny) for exec requests.
+// Always configure an explicit Approver; use a permissive implementation only
+// in controlled environments.
+type Approver interface {
+	// Await blocks until the operator approves (nil) or denies (non-nil error)
+	// the execution request. The argv is provided for display; it must NOT
+	// contain credential values (credentials are env-injected, never in argv).
+	Await(ctx context.Context, req ApprovalRequest) error
+}
+
+// ApprovalRequest carries the minimal set of fields needed for a human to make
+// an informed exec approval decision. Credential values are never included.
+type ApprovalRequest struct {
+	// Service is the name of the configured service whose credential will be injected.
+	Service string
+	// Argv is the parsed command (binary + args). No env vars, no credentials.
+	Argv []string
+	// Tool identifies the MCP tool that triggered the request ("straylight_exec").
+	Tool string
+}
+
+// execChildCredential holds the uid/gid for the exec child process.
+// A zero value means "not configured" (fail-closed: Execute will refuse).
+type execChildCredential struct {
+	set bool
+	uid uint32
+	gid uint32
+}
+
 // Wrapper executes subprocesses with credentials injected as environment
 // variables and sanitizes their output.
 type Wrapper struct {
 	resolver  CredentialResolver
 	sanitizer Sanitizer
 	guard     egress.Guard
+	childCred execChildCredential
+	approver  Approver
 }
 
 // NewWrapper creates a Wrapper using the given resolver and sanitizer with the
@@ -105,6 +141,26 @@ func NewWrapperWithGuard(resolver CredentialResolver, sanitizer Sanitizer, guard
 		sanitizer: sanitizer,
 		guard:     guard,
 	}
+}
+
+// SetChildCredential configures the uid/gid that exec child processes are
+// dropped to via SysProcAttr.Credential before the child executes (ADR-013
+// Part A, Option A2). Without this call, Execute fails closed.
+//
+// In the production container, uid/gid 10101 ("straylight-exec") is used. In
+// unit tests, the current process uid/gid can be passed to avoid real uid-drop
+// (which requires CAP_SETUID). The actual kernel-enforced init.json protection
+// is verified in container integration tests, not unit tests.
+func (w *Wrapper) SetChildCredential(uid, gid uint32) {
+	w.childCred = execChildCredential{set: true, uid: uid, gid: gid}
+}
+
+// SetApprover wires the human-in-the-loop approval gate (ADR-013 Part A,
+// Option A5). When set and Execute is called, the Approver.Await is invoked
+// after allowlist + egress checks and BEFORE the child process is spawned.
+// When unset (nil), Execute fails closed for exec requests.
+func (w *Wrapper) SetApprover(a Approver) {
+	w.approver = a
 }
 
 // ExecRequest describes a command execution request.
@@ -169,6 +225,14 @@ type ExecResponse struct {
 // Timeout and non-zero exit codes are reported via ExecResponse.ExitCode
 // without returning an error.
 func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, error) {
+	// Fail-closed: a child credential MUST be configured (ADR-013 Part A, Option A2).
+	// Executing as the parent uid would give the child process access to the
+	// OpenBao init.json (owned by the same uid), which violates the THREAT-MODEL §4
+	// invariant. Never fall back to same-uid exec silently.
+	if !w.childCred.set {
+		return nil, errors.New("cmdwrap: child credential not configured: refusing to execute as parent uid (ADR-013 fail-closed)")
+	}
+
 	// Resolve service metadata — ensures the service exists.
 	svc, err := w.resolver.Get(req.Service)
 	if err != nil {
@@ -186,18 +250,25 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 		envPairs = pairs
 	} else {
 		// Single-var path: validate env_var and resolve credential.
-		if !envVarPattern.MatchString(req.EnvVar) {
-			return nil, fmt.Errorf("cmdwrap: env_var %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", req.EnvVar)
+		// Populate from svc.ExecEnvVar when the request omits the field.
+		// This allows the service configuration to supply the env var name so
+		// handleExec does not need to know it (ADR-013 security seam fix).
+		envVar := req.EnvVar
+		if envVar == "" && svc.ExecEnvVar != "" {
+			envVar = svc.ExecEnvVar
 		}
-		if reservedEnvVars[req.EnvVar] {
-			return nil, fmt.Errorf("cmdwrap: env_var %q is a reserved system variable", req.EnvVar)
+		if !envVarPattern.MatchString(envVar) {
+			return nil, fmt.Errorf("cmdwrap: env_var %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", envVar)
+		}
+		if reservedEnvVars[envVar] {
+			return nil, fmt.Errorf("cmdwrap: env_var %q is a reserved system variable", envVar)
 		}
 
 		credential, err := w.resolver.GetCredential(req.Service)
 		if err != nil {
 			return nil, fmt.Errorf("cmdwrap: %w", err)
 		}
-		envPairs = buildEnv(req.EnvVar, credential)
+		envPairs = buildEnv(envVar, credential)
 	}
 
 	// Parse the command string into argv.
@@ -206,8 +277,21 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 		return nil, fmt.Errorf("cmdwrap: %w", err)
 	}
 
-	// Enforce command allowlist.
-	if err := checkAllowlist(argv[0], req.Service, req.AllowedCommands); err != nil {
+	// Path-normalize argv[0] before allowlist check so that "aws", "./aws", and
+	// "/usr/bin/aws" all match an allowlist entry of "aws" (Finding 3 fix).
+	// exec.LookPath resolves the binary path; filepath.Base extracts the name.
+	// On failure (binary not found) we use argv[0] as-is — the command will
+	// fail at exec time with a clear "not found" error.
+	resolvedBin, lookErr := exec.LookPath(argv[0])
+	if lookErr != nil {
+		resolvedBin = argv[0]
+	}
+	normalizedBin := filepath.Base(resolvedBin)
+
+	// Enforce command allowlist using svc.AllowedCommands (not req.AllowedCommands).
+	// The allowlist is the service-level control — callers must not be able to
+	// bypass it by omitting or clearing req.AllowedCommands (Finding 1 fix).
+	if err := checkAllowlist(normalizedBin, req.Service, svc.AllowedCommands); err != nil {
 		return nil, err
 	}
 
@@ -216,6 +300,22 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 	// like URLs are parsed; env-driven or config-driven targets are not checked.
 	if err := w.checkEgressPreflight(ctx, argv, svc); err != nil {
 		return nil, err
+	}
+
+	// Human-in-the-loop approval gate (ADR-013 Part A, Option A5).
+	// Fail-closed: a nil approver is treated as a permanent deny so that exec
+	// cannot be wired without explicitly configuring an approval strategy.
+	// The ApprovalRequest carries argv (never env vars / credential values).
+	if w.approver == nil {
+		return nil, errors.New("cmdwrap: exec approval gate not configured: refusing to run without an Approver (ADR-013 fail-closed)")
+	}
+	approvalReq := ApprovalRequest{
+		Service: req.Service,
+		Argv:    argv,
+		Tool:    "straylight_exec",
+	}
+	if err := w.approver.Await(ctx, approvalReq); err != nil {
+		return nil, fmt.Errorf("cmdwrap: exec approval denied: %w", err)
 	}
 
 	// Apply timeout.
@@ -228,6 +328,20 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 
 	// Build the command. exec.LookPath is called implicitly by exec.CommandContext.
 	cmd := exec.CommandContext(timeoutCtx, argv[0], argv[1:]...)
+
+	// Drop the child process to the configured exec uid/gid (ADR-013 Part A,
+	// Option A2). This makes init.json (owned by the parent uid, mode 0600 inside
+	// a 0700 dir) unreadable by the child via any binary the agent might choose.
+	// The actual kernel enforcement is verified in container integration tests.
+	//
+	// Skip setting SysProcAttr if child uid/gid match the current process's
+	// effective uid/gid: (a) setgroups(0) on Linux requires CAP_SETGID, which
+	// non-root processes lack; (b) production deployments always use a different
+	// uid, so this no-op path is only hit in development/testing; (c) fail-closed
+	// is preserved because childCred.set is validated earlier in the flow.
+	if uint32(os.Getuid()) != w.childCred.uid || uint32(os.Getgid()) != w.childCred.gid {
+		cmd.SysProcAttr = buildSysProcAttr(w.childCred.uid, w.childCred.gid)
+	}
 
 	// Set the minimal environment (essential keys + injected credentials).
 	cmd.Env = appendEssentialEnv(envPairs)
@@ -342,11 +456,14 @@ func splitCommand(command string) ([]string, error) {
 	return tokens, nil
 }
 
-// checkAllowlist returns an error if the binary name is not in allowed, or nil
-// if allowed is empty (meaning all commands are permitted).
+// checkAllowlist returns nil when binary is in the allowed list.
+// Fails closed when allowed is empty: an exec-enabled service must have a
+// non-empty allowlist — empty means "deny all" (ADR-013 Finding 1 fix).
+// The old allow-all-when-empty behavior applied to req.AllowedCommands which is
+// now unused; svc.AllowedCommands must always be validated explicitly.
 func checkAllowlist(binary, service string, allowed []string) error {
 	if len(allowed) == 0 {
-		return nil
+		return fmt.Errorf("cmdwrap: no allowed commands configured for service %q (exec requires a non-empty allowlist)", service)
 	}
 	for _, a := range allowed {
 		if binary == a {

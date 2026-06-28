@@ -35,9 +35,9 @@ func (m *mockProxy) HandleAPICall(_ context.Context, _ proxy.APICallRequest) (*p
 
 // mockServices satisfies mcp.ServiceLister.
 type mockServices struct {
-	list            []services.Service
-	checkStatus     string
-	checkErr        error
+	list        []services.Service
+	checkStatus string
+	checkErr    error
 }
 
 func (m *mockServices) List() []services.Service {
@@ -49,6 +49,15 @@ func (m *mockServices) CheckCredential(name string) (string, error) {
 		return "", m.checkErr
 	}
 	return m.checkStatus, nil
+}
+
+func (m *mockServices) ExecEnabledFor(name string) bool {
+	for _, svc := range m.list {
+		if svc.Name == name {
+			return svc.ExecEnabled
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

@@ -48,6 +48,7 @@ func (m *mockServiceListWithPolicy) List() []services.Service { return m.list }
 func (m *mockServiceListWithPolicy) CheckCredential(_ string) (string, error) {
 	return "available", nil
 }
+func (m *mockServiceListWithPolicy) ExecEnabledFor(_ string) bool { return false }
 func (m *mockServiceListWithPolicy) PolicyFor(service string) policy.Policy {
 	return m.policies[service]
 }

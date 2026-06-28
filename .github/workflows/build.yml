@@ -117,6 +117,18 @@ jobs:
         working-directory: npm/straylight-ai
         run: npm run build
 
+      - name: Verify npm authentication
+        working-directory: npm/straylight-ai
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if npm whoami; then
+            echo "npm authentication verified"
+          else
+            echo "NPM_TOKEN appears invalid or expired — mint a fresh npm automation token and update the NPM_TOKEN secret"
+            exit 1
+          fi
+
       - name: Publish
         working-directory: npm/straylight-ai
         run: npm publish

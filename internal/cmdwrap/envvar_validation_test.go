@@ -11,13 +11,20 @@ import (
 )
 
 // newValidWrapper returns a Wrapper with a valid github service and credential.
+// It configures child credential and auto-approver for ADR-013 fail-closed gates.
 func newValidWrapper() *cmdwrap.Wrapper {
-	svc := services.Service{Name: "github", Type: "http_proxy"}
+	// AllowedCommands is required now that the allowlist is sourced from svc (not req).
+	svc := services.Service{
+		Name:            "github",
+		Type:            "http_proxy",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"echo", "printenv", "false"},
+	}
 	resolver := &fakeResolver{
 		credentials: map[string]string{"github": "secrettoken"},
 		svcs:        map[string]services.Service{"github": svc},
 	}
-	return cmdwrap.NewWrapper(resolver, &noopSanitizer{})
+	return configureTestCredentials(cmdwrap.NewWrapper(resolver, &noopSanitizer{}))
 }
 
 // TestExecute_EmptyEnvVar_ReturnsError verifies that an empty EnvVar is rejected.
@@ -181,13 +188,13 @@ func TestExecute_InvalidEnvVarPatterns_ReturnError(t *testing.T) {
 	w := newValidWrapper()
 
 	invalidVars := []string{
-		"",            // empty
-		"lowercase",   // lowercase start
-		"_START",      // starts with underscore
-		"1NUMBER",     // starts with digit
-		"HAS SPACE",   // contains space
-		"HAS-DASH",    // contains dash
-		"HAS.DOT",     // contains dot
+		"",          // empty
+		"lowercase", // lowercase start
+		"_START",    // starts with underscore
+		"1NUMBER",   // starts with digit
+		"HAS SPACE", // contains space
+		"HAS-DASH",  // contains dash
+		"HAS.DOT",   // contains dot
 	}
 
 	for _, envVar := range invalidVars {

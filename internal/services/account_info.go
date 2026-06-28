@@ -43,7 +43,7 @@ type accountFetchFunc func(target, credential string, defaultHeaders map[string]
 // supports account info enrichment.
 var accountFetchers = map[string]accountFetchFunc{
 	// GitHub
-	"github_pat_classic":    fetchGitHubAccountInfo,
+	"github_pat_classic":      fetchGitHubAccountInfo,
 	"github_fine_grained_pat": fetchGitHubAccountInfo,
 	// OpenAI
 	"openai_api_key":     fetchOpenAIAccountInfo,
@@ -64,12 +64,12 @@ var accountFetchers = map[string]accountFetchFunc{
 
 // targetFetchers maps target URL prefixes to fetch functions for legacy services.
 var targetFetchers = map[string]accountFetchFunc{
-	"https://api.github.com":  fetchGitHubAccountInfo,
-	"https://api.openai.com":  fetchOpenAIAccountInfo,
+	"https://api.github.com":    fetchGitHubAccountInfo,
+	"https://api.openai.com":    fetchOpenAIAccountInfo,
 	"https://api.anthropic.com": fetchAnthropicAccountInfo,
-	"https://api.stripe.com":  fetchStripeAccountInfo,
-	"https://slack.com":       fetchSlackAccountInfo,
-	"https://gitlab.com":      fetchGitLabAccountInfo,
+	"https://api.stripe.com":    fetchStripeAccountInfo,
+	"https://slack.com":         fetchSlackAccountInfo,
+	"https://gitlab.com":        fetchGitLabAccountInfo,
 }
 
 // resolveAccountFetcher returns the fetcher function for the given auth method ID,
@@ -96,13 +96,13 @@ func resolveAccountFetcher(authMethodID string, target ...string) accountFetchFu
 
 // githubUserResponse is the relevant subset of the GitHub /user API response.
 type githubUserResponse struct {
-	Login     string `json:"login"`
-	Name      string `json:"name"`
-	AvatarURL string `json:"avatar_url"`
-	HTMLURL   string `json:"html_url"`
-	PublicRepos int  `json:"public_repos"`
-	Followers int    `json:"followers"`
-	Plan      *struct {
+	Login       string `json:"login"`
+	Name        string `json:"name"`
+	AvatarURL   string `json:"avatar_url"`
+	HTMLURL     string `json:"html_url"`
+	PublicRepos int    `json:"public_repos"`
+	Followers   int    `json:"followers"`
+	Plan        *struct {
 		Name string `json:"name"`
 	} `json:"plan"`
 }
