@@ -10,6 +10,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/audit"
 	"github.com/straylight-ai/straylight/internal/cmdwrap"
 	"github.com/straylight-ai/straylight/internal/database"
+	"github.com/straylight-ai/straylight/internal/mcpauth"
 	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/scanner"
 )
@@ -142,8 +143,18 @@ func (h *Handler) HandleToolCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := dispatchToolCall(r.Context(), req, h.proxy, h.services, h.scanner, h.fileReader, h.dbExecutor, h.cmdExecutor, h.auditLog, h.policyEngine, h.policyResolver)
+	result := dispatchToolCall(r.Context(), req, h.proxy, h.services, h.scanner, h.fileReader, h.dbExecutor, h.cmdExecutor, h.auditLog, h.policyEngine, h.policyResolver, "", "")
 	writeJSON(w, http.StatusOK, result)
+}
+
+// ToolDefinitionList returns a copy of the registered tool definitions.
+// It is used by the remote MCP Streamable-HTTP adapter (internal/mcphttp)
+// to serve the same tool list as the internal /api/v1/mcp/tool-list endpoint
+// (reuse, no duplication — ADR-015 §A.1).
+func ToolDefinitionList() []ToolDefinition {
+	out := make([]ToolDefinition, len(toolDefinitions))
+	copy(out, toolDefinitions)
+	return out
 }
 
 // isKnownTool returns true if name is one of the registered tool names.
@@ -166,4 +177,20 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 // writeError writes a plain JSON error response.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// Dispatch implements mcphttp.ToolDispatcher, enabling *mcp.Handler to serve as
+// the tool executor for the remote MCP Streamable-HTTP endpoint (ADR-015 §A.1).
+// It delegates to the existing dispatchToolCall using this handler's dependencies,
+// so no tool logic is duplicated. The identity Subject is threaded into the audit
+// event's SessionID field for remote call attribution. The raw token is never
+// present here (no-passthrough by construction in internal/mcphttp).
+func (h *Handler) Dispatch(ctx context.Context, req ToolCallRequest, identity *mcpauth.Identity) ToolCallResult {
+	actorSubject := ""
+	actorIssuer := ""
+	if identity != nil {
+		actorSubject = identity.Subject
+		actorIssuer = identity.Issuer
+	}
+	return dispatchToolCall(ctx, req, h.proxy, h.services, h.scanner, h.fileReader, h.dbExecutor, h.cmdExecutor, h.auditLog, h.policyEngine, h.policyResolver, actorSubject, actorIssuer)
 }

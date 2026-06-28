@@ -276,3 +276,29 @@ func TestImportEndpoint_NilEgressGuardFallsBackToDefault(t *testing.T) {
 		t.Fatalf("expected 400 (loopback blocked by default guard), got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Finding 3: EgressSSRFGuard adapter must satisfy mcpauth.SSRFGuard.
+// RED: fails until NewEgressSSRFGuard is added to internal/server.
+// ---------------------------------------------------------------------------
+
+// TestNewEgressSSRFGuard_AllowsPublicHost verifies the adapter allows a resolvable
+// public host (as decided by egress.Guard.CheckHost with default-deny policy).
+func TestNewEgressSSRFGuard_AllowsPublicHost(t *testing.T) {
+	g := egress.AllowAll()
+	ssrfGuard := server.NewEgressSSRFGuard(g)
+	if !ssrfGuard.IsHostAllowed(context.Background(), "example.com") {
+		t.Error("AllowAll egress guard: expected IsHostAllowed(example.com) == true")
+	}
+}
+
+// TestNewEgressSSRFGuard_BlocksPrivateHost verifies the adapter blocks a private-IP host
+// as denied by the default denylist via egress.Guard.CheckHost.
+func TestNewEgressSSRFGuard_BlocksPrivateHost(t *testing.T) {
+	g := egress.New()
+	ssrfGuard := server.NewEgressSSRFGuard(g)
+	// 169.254.169.254 is in the SSRF denylist — must be blocked.
+	if ssrfGuard.IsHostAllowed(context.Background(), "169.254.169.254") {
+		t.Error("default egress guard: expected IsHostAllowed(169.254.169.254) == false")
+	}
+}
