@@ -2,9 +2,12 @@ package openapi_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/openapi"
@@ -80,5 +83,59 @@ func TestFetchSpec_HTTPErrorRejected(t *testing.T) {
 	_, err := openapi.FetchSpec(context.Background(), guard, server.URL)
 	if err == nil {
 		t.Fatal("expected error for HTTP 404 response")
+	}
+}
+
+// TestFetchSpec_RedirectToLoopbackRejected verifies the SSRF-via-redirect attack is
+// blocked. The guard is AllowAll so the initial URL passes pre-check; the
+// redirect destination (127.0.0.1) must be caught by the client's CheckRedirect
+// or the DialContext guard, not the pre-flight host check.
+func TestFetchSpec_RedirectToLoopbackRejected(t *testing.T) {
+	// contentServer simulates the SSRF target on 127.0.0.1.
+	contentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"secret":"internal-data"}`))
+	}))
+	defer contentServer.Close()
+
+	u, err := url.Parse(contentServer.URL)
+	if err != nil {
+		t.Fatalf("parse content server URL: %v", err)
+	}
+	port := u.Port()
+
+	// redirectServer returns 302 → 127.0.0.1:<port>.
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, fmt.Sprintf("http://127.0.0.1:%s/internal", port), http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	// AllowAll: initial URL passes. The fix must catch the redirect destination.
+	guard := egress.AllowAll()
+
+	_, err = openapi.FetchSpec(context.Background(), guard, redirectServer.URL)
+	if err == nil {
+		t.Fatal("FetchSpec followed a 302 redirect to 127.0.0.1 without error — SSRF via redirect is possible with the current implementation")
+	}
+}
+
+// TestFetchSpec_RedirectToInternalIPRejected verifies that a 302 redirect to an
+// RFC1918 address (10.0.0.1) is blocked — the redirect must not be followed.
+// A short context timeout bounds the test in case the fix tries to dial anyway.
+func TestFetchSpec_RedirectToInternalIPRejected(t *testing.T) {
+	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://10.0.0.1/metadata", http.StatusFound)
+	}))
+	defer redirectServer.Close()
+
+	guard := egress.AllowAll()
+
+	// 3s deadline: the fix must reject the redirect immediately, not time out dialing.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := openapi.FetchSpec(ctx, guard, redirectServer.URL)
+	if err == nil {
+		t.Fatal("FetchSpec must return an error: redirect to RFC1918 10.0.0.1 must be blocked before any dial completes")
 	}
 }

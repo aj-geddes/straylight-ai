@@ -1,6 +1,7 @@
 package openapi_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/straylight-ai/straylight/internal/openapi"
@@ -260,5 +261,55 @@ func TestFromSpec_InvalidJSON(t *testing.T) {
 	_, err := openapi.FromSpec(spec, "test-source")
 	if err == nil {
 		t.Error("expected error for invalid JSON, got nil")
+	}
+}
+
+// TestFromSpec_MaliciousSchemeNameRejected verifies that a security scheme name (s.Name)
+// containing Go template injection characters (e.g. "{{") does not produce a
+// template string with injectable content. The scheme must be rejected or skipped
+// with a warning so untrusted spec content cannot inject Go template syntax.
+func TestFromSpec_MaliciousSchemeNameRejected(t *testing.T) {
+	// The apiKey name "{{.token}}malicious" contains template metacharacters.
+	// If embedded as-is into the Cookie header template, the result would be:
+	//   Cookie: {{.token}}malicious={{.token}}
+	// which is injectable. The fix must reject this name with a warning.
+	spec := []byte(`{
+		"openapi": "3.1.0",
+		"info": {"title": "Test API", "version": "1.0.0"},
+		"servers": [{"url": "https://api.example.com"}],
+		"paths": {},
+		"components": {
+			"securitySchemes": {
+				"injected": {
+					"type": "apiKey",
+					"in": "cookie",
+					"name": "{{.token}}malicious"
+				}
+			}
+		}
+	}`)
+
+	result, err := openapi.FromSpec(spec, "test-source")
+	if err != nil {
+		t.Fatalf("FromSpec() returned unexpected error: %v", err)
+	}
+
+	// The malicious scheme must be skipped (no auth methods produced).
+	if len(result.Template.AuthMethods) != 0 {
+		// Check that no auth method embeds the injection string.
+		for _, am := range result.Template.AuthMethods {
+			if am.Injection.Custom != nil {
+				for _, v := range am.Injection.Custom.Headers {
+					if strings.Contains(v, "{{.token}}malicious") {
+						t.Errorf("injectable template string found in Custom.Headers: %q", v)
+					}
+				}
+			}
+		}
+	}
+
+	// The malicious scheme must produce a warning.
+	if len(result.Warnings) == 0 {
+		t.Error("expected a warning for the malicious scheme name, got none")
 	}
 }

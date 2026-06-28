@@ -7,6 +7,7 @@ package openapi
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,8 +17,9 @@ import (
 // ImportResult is a DRAFT ServiceTemplate plus provenance and review flags.
 // Every result is marked draft via the Source field.
 type ImportResult struct {
-	// Template is the imported draft; it has passed services.ValidateTemplate
-	// where possible, but callers must review and commit before use.
+	// Template is the imported draft. It is NOT automatically validated by
+	// services.ValidateTemplate; callers must review and commit before use.
+	// A non-empty Source field marks it as a draft per ADR-014 Part C.
 	Template services.ServiceTemplate
 	// Warnings lists unmapped schemes, ambiguous servers, and other advisory notes.
 	Warnings []string
@@ -54,6 +56,12 @@ type openAPISecurityScheme struct {
 	In     string `json:"in"`     // for type=apiKey
 	Name   string `json:"name"`   // for type=apiKey
 }
+
+// safeAPIKeyNameRe matches apiKey scheme name values (header name, query param,
+// cookie name) that are safe to embed in Go template strings. Names must contain
+// only alphanumerics, hyphens, underscores, dots, or tildes — no template
+// metacharacters ({{, }}, $, etc.).
+var safeAPIKeyNameRe = regexp.MustCompile(`^[A-Za-z0-9_.\-]+$`)
 
 // FromSpec parses an OpenAPI 3.0/3.1 document (JSON or YAML) and maps it to a
 // draft ServiceTemplate. The caller is responsible for SSRF-safe fetching;
@@ -112,6 +120,15 @@ func FromSpec(spec []byte, source string) (ImportResult, error) {
 		AuthMethods: authMethods,
 	}
 
+	// Validate the drafted template when it has auth methods. Validation errors
+	// are advisory (added to Warnings) — the draft is still returned for caller
+	// review per ADR-014 Part C.
+	if len(authMethods) > 0 {
+		if verr := services.ValidateTemplate(tmpl); verr != nil {
+			warnings = append(warnings, fmt.Sprintf("draft template validation: %v", verr))
+		}
+	}
+
 	return ImportResult{
 		Template: tmpl,
 		Warnings: warnings,
@@ -165,6 +182,15 @@ func mapHTTPScheme(name string, s openAPISecurityScheme) (*services.AuthMethod, 
 }
 
 func mapAPIKeyScheme(name string, s openAPISecurityScheme) (*services.AuthMethod, string) {
+	// Validate s.Name before embedding it in template strings. Names from untrusted
+	// specs must contain only safe characters so they cannot inject Go template syntax.
+	if !safeAPIKeyNameRe.MatchString(s.Name) {
+		return nil, fmt.Sprintf(
+			"security scheme %q: apiKey name %q contains unsafe characters; must match ^[A-Za-z0-9_.\\-]+$ to prevent template injection",
+			name, s.Name,
+		)
+	}
+
 	switch strings.ToLower(s.In) {
 	case "header":
 		return &services.AuthMethod{

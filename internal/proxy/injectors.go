@@ -191,7 +191,7 @@ func (c *CustomAuthInjector) Inject(req *http.Request, fields map[string]string,
 	for headerName, tmplStr := range spec.Headers {
 		val, err := renderCustomTemplate(tmplStr, data)
 		if err != nil {
-			return fmt.Errorf("custom_auth: header %q: %w", headerName, maskValue(err, fields))
+			return fmt.Errorf("custom_auth: header %q: %w", headerName, credSafeError(err, fields))
 		}
 		req.Header.Set(headerName, val)
 	}
@@ -202,7 +202,7 @@ func (c *CustomAuthInjector) Inject(req *http.Request, fields map[string]string,
 		for paramName, tmplStr := range spec.Query {
 			val, err := renderCustomTemplate(tmplStr, data)
 			if err != nil {
-				return fmt.Errorf("custom_auth: query param %q: %w", paramName, maskValue(err, fields))
+				return fmt.Errorf("custom_auth: query param %q: %w", paramName, credSafeError(err, fields))
 			}
 			q.Set(paramName, val)
 		}
@@ -251,7 +251,7 @@ func injectBodyJSON(req *http.Request, spec *services.CustomAuthSpec, data map[s
 	for key, tmplStr := range spec.Body {
 		val, err := renderCustomTemplate(tmplStr, data)
 		if err != nil {
-			return fmt.Errorf("custom_auth: body key %q: %w", key, maskValue(err, fields))
+			return fmt.Errorf("custom_auth: body key %q: %w", key, credSafeError(err, fields))
 		}
 		merged[key] = val
 	}
@@ -272,7 +272,7 @@ func injectBodyForm(req *http.Request, spec *services.CustomAuthSpec, data map[s
 	for key, tmplStr := range spec.Body {
 		val, err := renderCustomTemplate(tmplStr, data)
 		if err != nil {
-			return fmt.Errorf("custom_auth: body key %q: %w", key, maskValue(err, fields))
+			return fmt.Errorf("custom_auth: body key %q: %w", key, credSafeError(err, fields))
 		}
 		form.Set(key, val)
 	}
@@ -297,10 +297,13 @@ func renderCustomTemplate(tmplStr string, data map[string]interface{}) (string, 
 	return buf.String(), nil
 }
 
-// maskValue strips any field value occurrences from an error message so that
-// credential values are never leaked through error messages.
-func maskValue(err error, fields map[string]string) error {
-	// The error is returned as-is; this function is a hook for future masking.
-	// Go template "missingkey=error" errors contain the key name, not the value.
+// credSafeError is a pass-through error wrapper that exists as a scrubbing hook.
+// It returns err unchanged today because Go text/template "missingkey=error" errors
+// contain only the KEY NAME, never the credential value — so there is nothing to
+// scrub from the message. If the template engine is ever changed to a variant that
+// embeds values in its errors, add value-scrubbing here by iterating fields and
+// replacing any matching substring in err.Error() with "[REDACTED]".
+// Call sites: all renderCustomTemplate errors in CustomAuthInjector.Inject.
+func credSafeError(err error, _ map[string]string) error {
 	return err
 }
