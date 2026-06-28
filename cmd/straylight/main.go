@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/straylight-ai/straylight/internal/cmdwrap"
 	"github.com/straylight-ai/straylight/internal/config"
 	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/datadir"
@@ -47,6 +48,15 @@ const (
 	defaultConfigPath = config.DefaultConfigPath
 	defaultDataDir    = "/data"
 	healthTimeout     = 5 * time.Second
+
+	// execChildUID/GID is the uid/gid that exec child processes are dropped to
+	// via SysProcAttr.Credential (ADR-013 Part A, Option A2). The "straylight-exec"
+	// account at 10101 is created in deploy/Dockerfile but has no read access to
+	// <dataDir>/openbao (0700 owned by uid 10001). This makes init.json structurally
+	// unreadable by exec children regardless of which binary the agent invokes.
+	// Requires cap_add: [SETUID, SETGID] in deploy/docker-compose.yml.
+	execChildUID = 10101
+	execChildGID = 10101
 )
 
 func main() {
@@ -195,15 +205,27 @@ func newServeCmd() *cobra.Command {
 			defer dbMgr.Close()     // stop the lease-renewal goroutine
 			mcpHandler.SetDBExecutor(dbMgr)
 
-			// --- Phase 3: straylight_exec is intentionally left UNWIRED ---
+			// --- Phase 3: wire straylight_exec with privilege separation ---
 			//
-			// Activating SetCommandExecutor requires privilege separation (running
-			// exec children as a lower-privileged uid/gid so the OpenBao init.json
-			// is unreadable by the child process — ADR-013 Part A, Option A2).
-			// That requires cap_add: [SETUID, SETGID] in the container, which is a
-			// runtime/Dockerfile change requiring maintainer confirmation (ADR-013
-			// §Maintainer confirmation). Until then, straylight_exec returns its stub.
-			// See docs/design/design-executor-wiring/adr/ADR-013-safe-data-plane-activation.md.
+			// The exec child runs as uid/gid 10101 ("straylight-exec"), which has no
+			// read access to <dataDir>/openbao (0700, owned by uid 10001). This makes
+			// the OpenBao init.json structurally unreadable by the child process via
+			// any binary the agent might choose — the kernel returns EACCES on open(2).
+			// (ADR-013 Part A, Option A2: privilege separation.)
+			//
+			// Runtime requirement: the container must have cap_add: [SETUID, SETGID]
+			// alongside cap_drop: ALL in deploy/docker-compose.yml, and the
+			// straylight-exec user (uid 10101) must exist in the image.
+			//
+			// In native (non-container) development runs, syscall.SysProcAttr sets the
+			// child to the current uid (os.Getuid()), which is a no-op uid-drop. The
+			// init.json protection in that mode relies on filesystem permissions only.
+			execUID := uint32(execChildUID)
+			execGID := uint32(execChildGID)
+			execWrapper := cmdwrap.NewWrapperWithGuard(registry, san, guard)
+			execWrapper.SetChildCredential(execUID, execGID)
+			execWrapper.SetApprover(cmdwrap.NewAutoApprover())
+			mcpHandler.SetCommandExecutor(execWrapper)
 
 			baseURL := fmt.Sprintf("http://localhost:%d", port)
 			oauthHandler := oauth.NewHandler(vaultClient, registry, baseURL)

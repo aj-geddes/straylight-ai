@@ -39,6 +39,10 @@ type ProxyHandler interface {
 type ServiceLister interface {
 	List() []services.Service
 	CheckCredential(name string) (string, error)
+	// ExecEnabledFor reports whether the named service has ExecEnabled=true.
+	// Returns false when the service is not found. Used by handleExec to
+	// enforce the per-service opt-in gate before dispatching to the executor.
+	ExecEnabledFor(name string) bool
 }
 
 // ToolDefinition holds the name, description, and input schema for an MCP tool
@@ -353,7 +357,7 @@ func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, 
 	case "straylight_services":
 		result = handleServices(s)
 	case "straylight_exec":
-		result = handleExec(ctx, req.Arguments, exec)
+		result = handleExec(ctx, req.Arguments, exec, s)
 	case "straylight_scan":
 		result = handleScan(req.Arguments, sc)
 	case "straylight_read_file":
@@ -562,7 +566,11 @@ func handleServices(s ServiceLister) ToolCallResult {
 // handleExec implements the straylight_exec tool.
 // When exec is nil (no CommandExecutor configured), it returns the backward-compatible
 // stub message. Otherwise it dispatches to the real command wrapper.
-func handleExec(ctx context.Context, args map[string]interface{}, exec CommandExecutor) ToolCallResult {
+//
+// The ExecEnabled per-service gate (ADR-013 Part C.1) is evaluated BEFORE
+// dispatching to the executor so that services that have not explicitly opted
+// in to exec cannot be targeted regardless of the executor being wired.
+func handleExec(ctx context.Context, args map[string]interface{}, exec CommandExecutor, s ServiceLister) ToolCallResult {
 	if exec == nil {
 		return ToolCallResult{
 			Content: []ContentItem{{Type: "text", Text: execStubMessage}},
@@ -572,6 +580,12 @@ func handleExec(ctx context.Context, args map[string]interface{}, exec CommandEx
 	service, ok := stringArg(args, "service")
 	if !ok || service == "" {
 		return errorResult("Error: missing required argument 'service'")
+	}
+
+	// ADR-013 Part C.1: per-service exec opt-in gate. ExecEnabled defaults false.
+	// A service must explicitly set exec_enabled: true to use straylight_exec.
+	if !s.ExecEnabledFor(service) {
+		return errorResult(fmt.Sprintf("Error: exec is not enabled for service %q; set exec_enabled: true and a non-empty allowed_commands list in the service configuration", service))
 	}
 
 	command, ok := stringArg(args, "command")

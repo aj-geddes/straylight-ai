@@ -61,8 +61,14 @@ type Service struct {
 	QueryParam     string            `json:"query_param,omitempty"     yaml:"query_param,omitempty"`
 	DefaultHeaders map[string]string `json:"default_headers,omitempty" yaml:"default_headers,omitempty"`
 	// ExecEnabled indicates whether this service supports credential-injected
-	// command execution via straylight_exec. Set by WP-2.1 (command wrapper).
+	// command execution via straylight_exec. Default false. When true,
+	// AllowedCommands must be non-empty (ADR-013 Part C.1).
 	ExecEnabled bool `json:"exec_enabled,omitempty" yaml:"exec_enabled,omitempty"`
+	// AllowedCommands is the mandatory per-service command allowlist for
+	// straylight_exec. Required and non-empty when ExecEnabled is true;
+	// ignored otherwise. An empty allowlist with ExecEnabled=true is rejected
+	// at validation time (deny-all-by-default; ADR-013 Part A, Option A4).
+	AllowedCommands []string `json:"allowed_commands,omitempty" yaml:"allowed_commands,omitempty"`
 	// Egress is the per-service outbound allowlist applied by the egress guard.
 	// When nil, only the built-in SSRF denylist applies (public destinations
 	// allowed, metadata/private/link-local denied).
@@ -468,6 +474,19 @@ func (r *Registry) TargetHostFor(name string) string {
 	return u.Hostname()
 }
 
+// ExecEnabledFor reports whether the named service has ExecEnabled set to true.
+// Returns false when the service is not found. This satisfies the mcp.ServiceLister
+// interface requirement for the ADR-013 per-service exec gate.
+func (r *Registry) ExecEnabledFor(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	svc, ok := r.services[name]
+	if !ok {
+		return false
+	}
+	return svc.ExecEnabled
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -530,6 +549,15 @@ func (r *Registry) saveMetadata(svc Service) error {
 			data["policy"] = string(policyJSON)
 		}
 	}
+	if svc.ExecEnabled {
+		data["exec_enabled"] = "true"
+	}
+	if len(svc.AllowedCommands) > 0 {
+		acJSON, err := json.Marshal(svc.AllowedCommands)
+		if err == nil {
+			data["allowed_commands"] = string(acJSON)
+		}
+	}
 	return r.vault.WriteSecret(metadataPath(svc.Name), data)
 }
 
@@ -588,6 +616,16 @@ func (r *Registry) LoadFromVault() error {
 			}
 		}
 
+		if getString(data, "exec_enabled") == "true" {
+			svc.ExecEnabled = true
+		}
+		if acJSON := getString(data, "allowed_commands"); acJSON != "" {
+			var cmds []string
+			if json.Unmarshal([]byte(acJSON), &cmds) == nil {
+				svc.AllowedCommands = cmds
+			}
+		}
+
 		r.mu.Lock()
 		if _, exists := r.services[name]; !exists {
 			r.services[name] = svc
@@ -614,6 +652,13 @@ func validateService(svc Service) error {
 	// Validate type.
 	if !validTypes[svc.Type] {
 		return fmt.Errorf("services: invalid type %q: must be http_proxy, oauth, database, or cloud", svc.Type)
+	}
+
+	// ADR-013 Part C.1: when exec_enabled is true, allowed_commands is mandatory
+	// and must be non-empty. An empty allowlist would permit every binary, defeating
+	// the per-service scope restriction (second layer after the uid-drop).
+	if svc.ExecEnabled && len(svc.AllowedCommands) == 0 {
+		return fmt.Errorf("services: exec_enabled requires a non-empty allowed_commands list for service %q", svc.Name)
 	}
 
 	// Database and cloud services do not use a target URL — skip URL validation.

@@ -41,6 +41,8 @@ func (m *mcpMockServices) CheckCredential(_ string) (string, error) {
 	return m.checkStatus, nil
 }
 
+func (m *mcpMockServices) ExecEnabledFor(_ string) bool { return false }
+
 // newTestServerWithMCP creates a server with a real MCP handler wired in.
 func newTestServerWithMCP(t *testing.T) *server.Server {
 	t.Helper()

@@ -18,6 +18,17 @@ services:
     # Straylight runs on port 9470 (>1024) so no CAP_NET_BIND_SERVICE is required.
     cap_drop:
       - ALL
+    # CAP_SETUID and CAP_SETGID are re-added specifically to allow the main
+    # process (uid 10001) to drop exec child processes to uid 10101
+    # ("straylight-exec") via SysProcAttr.Credential. This is the structural
+    # control (ADR-013 Part A, Option A2) that makes /data/openbao/init.json
+    # unreadable by exec children: the kernel returns EACCES on open(2) for
+    # all binaries running as uid 10101 against a 0600 file owned by 10001.
+    # Net posture: stronger than cap_drop ALL alone, because without this the
+    # exec child would run as the vault-owning uid and could read init.json.
+    cap_add:
+      - SETUID
+      - SETGID
 
 volumes:
   straylight-data:

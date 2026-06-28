@@ -48,8 +48,18 @@ RUN apk add --no-cache ca-certificates curl zstd tar && \
 # Create a dedicated non-root user and group for the container process.
 # UID 10001 is chosen to be well above the range reserved for system accounts
 # while remaining in the 16-bit uid range supported by all Linux kernels.
+#
+# Also create straylight-exec (UID/GID 10101) — the lower-privileged uid that
+# exec child processes are dropped to via SysProcAttr.Credential (ADR-013
+# Part A, Option A2). This uid has no access to /data/openbao (0700, owned
+# by uid 10001), which makes the OpenBao init.json structurally unreadable by
+# any command the agent might invoke via straylight_exec.
+# Note: straylight-exec is NOT added to the straylight group so it cannot
+# read group-readable openbao files (defence in depth).
 RUN addgroup -g 10001 -S straylight && \
-    adduser -u 10001 -S straylight -G straylight
+    adduser -u 10001 -S straylight -G straylight && \
+    addgroup -g 10101 -S straylight-exec && \
+    adduser -u 10101 -S straylight-exec -G straylight-exec
 
 # Copy the compiled Go binaries from the build stage.
 COPY --from=go-builder /straylight /usr/local/bin/straylight

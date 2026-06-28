@@ -67,7 +67,7 @@ func newExecTestHandler(exec mcp.CommandExecutor, svc mcp.ServiceLister) *mcp.Ha
 // TestHandleExec_MissingService verifies that missing service argument returns error.
 func TestHandleExec_MissingService(t *testing.T) {
 	svcList := &mockServices{
-		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available"}},
+		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available", ExecEnabled: true, AllowedCommands: []string{"echo", "false", "ls", "sleep"}}},
 	}
 	w := doRequest(newExecTestHandler(&mockExecWrapper{}, svcList), http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
 		"tool": "straylight_exec",
@@ -86,7 +86,7 @@ func TestHandleExec_MissingService(t *testing.T) {
 // TestHandleExec_MissingCommand verifies that missing command argument returns error.
 func TestHandleExec_MissingCommand(t *testing.T) {
 	svcList := &mockServices{
-		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available"}},
+		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available", ExecEnabled: true, AllowedCommands: []string{"echo", "false", "ls", "sleep"}}},
 	}
 	w := doRequest(newExecTestHandler(&mockExecWrapper{}, svcList), http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
 		"tool": "straylight_exec",
@@ -109,7 +109,7 @@ func TestHandleExec_SuccessReturnsOutput(t *testing.T) {
 		response: &cmdwrap.ExecResponse{ExitCode: 0, Stdout: "hello world\n", Stderr: ""},
 	}
 	svcList := &mockServices{
-		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available"}},
+		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available", ExecEnabled: true, AllowedCommands: []string{"echo", "false", "ls", "sleep"}}},
 	}
 
 	w := doRequest(newExecTestHandler(mockExec, svcList), http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
@@ -140,7 +140,7 @@ func TestHandleExec_NonZeroExitCodeReturnsErrorResult(t *testing.T) {
 		response: &cmdwrap.ExecResponse{ExitCode: 1, Stdout: "", Stderr: "command failed"},
 	}
 	svcList := &mockServices{
-		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available"}},
+		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available", ExecEnabled: true, AllowedCommands: []string{"echo", "false", "ls", "sleep"}}},
 	}
 
 	w := doRequest(newExecTestHandler(mockExec, svcList), http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{
@@ -189,7 +189,7 @@ func TestHandleExec_TimeoutReturnsErrorResult(t *testing.T) {
 		response: &cmdwrap.ExecResponse{ExitCode: -1, Stdout: "", Stderr: "command timed out after 1 seconds"},
 	}
 	svcList := &mockServices{
-		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available"}},
+		list: []services.Service{{Name: "github", Type: "http_proxy", Status: "available", ExecEnabled: true, AllowedCommands: []string{"echo", "false", "ls", "sleep"}}},
 	}
 
 	w := doRequest(newExecTestHandler(mockExec, svcList), http.MethodPost, "/api/v1/mcp/tool-call", map[string]interface{}{

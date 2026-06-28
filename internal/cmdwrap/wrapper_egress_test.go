@@ -35,7 +35,7 @@ func newEgressWrapper(guard egress.Guard, svcEgress *services.EgressPolicy) *cmd
 			},
 		},
 	}
-	return cmdwrap.NewWrapperWithGuard(resolver, &fakeSanitizer{}, guard)
+	return configureTestCredentials(cmdwrap.NewWrapperWithGuard(resolver, &fakeSanitizer{}, guard))
 }
 
 // ---------------------------------------------------------------------------
