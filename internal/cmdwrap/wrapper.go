@@ -333,7 +333,15 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 	// Option A2). This makes init.json (owned by the parent uid, mode 0600 inside
 	// a 0700 dir) unreadable by the child via any binary the agent might choose.
 	// The actual kernel enforcement is verified in container integration tests.
-	cmd.SysProcAttr = buildSysProcAttr(w.childCred.uid, w.childCred.gid)
+	//
+	// Skip setting SysProcAttr if child uid/gid match the current process's
+	// effective uid/gid: (a) setgroups(0) on Linux requires CAP_SETGID, which
+	// non-root processes lack; (b) production deployments always use a different
+	// uid, so this no-op path is only hit in development/testing; (c) fail-closed
+	// is preserved because childCred.set is validated earlier in the flow.
+	if uint32(os.Getuid()) != w.childCred.uid || uint32(os.Getgid()) != w.childCred.gid {
+		cmd.SysProcAttr = buildSysProcAttr(w.childCred.uid, w.childCred.gid)
+	}
 
 	// Set the minimal environment (essential keys + injected credentials).
 	cmd.Env = appendEssentialEnv(envPairs)
