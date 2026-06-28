@@ -4,8 +4,12 @@ vi.mock("child_process", () => ({
   execSync: vi.fn(),
   spawnSync: vi.fn(),
 }));
+vi.mock("fs");
+vi.mock("os");
 
-import { execSync, spawnSync } from "child_process";
+import { execSync } from "child_process";
+import fs from "fs";
+import os from "os";
 import {
   registerMCP,
   isClaudeAvailable,
@@ -13,10 +17,20 @@ import {
 } from "../mcp-register.js";
 
 const mockExecSync = vi.mocked(execSync);
-const mockSpawnSync = vi.mocked(spawnSync);
+const mockFs = vi.mocked(fs);
+const mockOs = vi.mocked(os);
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mockOs.homedir.mockReturnValue("/mock/home");
+  mockFs.existsSync.mockReturnValue(false);
+  mockFs.readFileSync.mockReturnValue("{}");
+  mockFs.writeFileSync.mockReturnValue(undefined);
+  mockFs.renameSync.mockReturnValue(undefined);
+  mockFs.mkdirSync.mockReturnValue(undefined);
+  mockExecSync.mockImplementation(() => {
+    throw new Error("command not found: claude");
+  });
 });
 
 afterEach(() => {
@@ -38,72 +52,71 @@ describe("isClaudeAvailable", () => {
 });
 
 describe("registerMCP", () => {
-  it("returns true and registers MCP when claude is available", async () => {
-    // First call: claude --version succeeds
-    mockExecSync.mockReturnValue(Buffer.from("claude version 1.0.0"));
-    // spawnSync for the mcp add command
-    mockSpawnSync.mockReturnValue({
-      status: 0,
-      stdout: Buffer.from(""),
-      stderr: Buffer.from(""),
-      pid: 1234,
-      output: [],
-      signal: null,
+  it("returns a RegisterResult object with registered/skipped/errors arrays", async () => {
+    const result = await registerMCP();
+    expect(result).toHaveProperty("registered");
+    expect(result).toHaveProperty("skipped");
+    expect(result).toHaveProperty("errors");
+    expect(Array.isArray(result.registered)).toBe(true);
+    expect(Array.isArray(result.skipped)).toBe(true);
+    expect(Array.isArray(result.errors)).toBe(true);
+  });
+
+  it("includes Claude Code in registered when claude is available and mcp add succeeds", async () => {
+    mockExecSync.mockImplementation((cmd) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("--version")) return Buffer.from("claude version 1.0.0");
+      if (cmdStr.includes("mcp add")) return Buffer.from("");
+      throw new Error("Unexpected: " + cmdStr);
     });
 
     const result = await registerMCP();
-    expect(result).toBe(true);
-    expect(mockSpawnSync).toHaveBeenCalledWith(
-      "claude",
-      expect.arrayContaining(["mcp", "add"]),
-      expect.any(Object)
-    );
+    expect(result.registered).toContain("Claude Code");
   });
 
-  it("returns false when claude CLI is not available", async () => {
+  it("puts Claude Code in skipped when claude CLI is not available", async () => {
     mockExecSync.mockImplementation(() => {
       throw new Error("command not found: claude");
     });
 
     const result = await registerMCP();
-    expect(result).toBe(false);
-    expect(mockSpawnSync).not.toHaveBeenCalled();
+    expect(result.skipped).toContain("Claude Code");
+    expect(result.registered).not.toContain("Claude Code");
   });
 
-  it("returns false when mcp add command fails", async () => {
-    mockExecSync.mockReturnValue(Buffer.from("claude version 1.0.0"));
-    mockSpawnSync.mockReturnValue({
-      status: 1,
-      stdout: Buffer.from(""),
-      stderr: Buffer.from("error: already exists"),
-      pid: 1234,
-      output: [],
-      signal: null,
+  it("puts Claude Code in errors when mcp add command fails", async () => {
+    mockExecSync.mockImplementation((cmd) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("--version")) return Buffer.from("claude version 1.0.0");
+      throw new Error("mcp add failed");
     });
 
     const result = await registerMCP();
-    expect(result).toBe(false);
+    expect(result.errors.some((e) => e.includes("Claude Code"))).toBe(true);
+    expect(result.registered).not.toContain("Claude Code");
   });
 
-  it("includes correct arguments in the registration command", async () => {
-    mockExecSync.mockReturnValue(Buffer.from("claude version 1.0.0"));
-    mockSpawnSync.mockReturnValue({
-      status: 0,
-      stdout: Buffer.from(""),
-      stderr: Buffer.from(""),
-      pid: 1234,
-      output: [],
-      signal: null,
+  it("uses --scope user and correct server name in claude mcp add command", async () => {
+    mockExecSync.mockImplementation((cmd) => {
+      const cmdStr = String(cmd);
+      if (cmdStr.includes("--version")) return Buffer.from("claude version 1.0.0");
+      if (cmdStr.includes("mcp add")) return Buffer.from("");
+      throw new Error("Unexpected: " + cmdStr);
     });
 
     await registerMCP();
 
-    const args = mockSpawnSync.mock.calls[0][1] as string[];
-    expect(args).toContain("mcp");
-    expect(args).toContain("add");
-    expect(args).toContain("straylight-ai");
-    expect(args).toContain("--transport");
-    expect(args).toContain("stdio");
+    const addCall = mockExecSync.mock.calls.find(([cmd]) =>
+      String(cmd).includes("mcp add")
+    );
+    expect(addCall).toBeDefined();
+    const addCmd = String(addCall[0]);
+    expect(addCmd).toContain("--scope user");
+    expect(addCmd).toContain("straylight");
+    expect(addCmd).toContain("npx");
+    expect(addCmd).toContain("-y");
+    expect(addCmd).toContain("straylight-ai");
+    expect(addCmd).toContain("mcp");
   });
 });
 
@@ -114,10 +127,17 @@ describe("manualRegistrationInstructions", () => {
     expect(instructions.length).toBeGreaterThan(0);
   });
 
-  it("includes the claude mcp add command", () => {
+  it("includes the claude mcp add command with --scope user", () => {
     const instructions = manualRegistrationInstructions();
     expect(instructions).toContain("claude mcp add");
-    expect(instructions).toContain("straylight-ai");
-    expect(instructions).toContain("--transport stdio");
+    expect(instructions).toContain("straylight");
+    expect(instructions).toContain("--scope user");
+  });
+
+  it("includes multi-CLI instructions for Cursor, Windsurf, VS Code", () => {
+    const instructions = manualRegistrationInstructions();
+    expect(instructions).toContain(".cursor");
+    expect(instructions).toContain("windsurf");
+    expect(instructions).toContain(".vscode");
   });
 });

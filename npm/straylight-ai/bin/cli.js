@@ -5,7 +5,7 @@ const path = require("path");
 
 const command = process.argv[2] || "setup";
 
-const validCommands = ["setup", "start", "stop", "status", "upgrade", "mcp"];
+const validCommands = ["setup", "start", "stop", "status", "upgrade", "mcp", "register", "unregister"];
 
 if (!validCommands.includes(command)) {
   console.error(`Unknown command: ${command}`);
@@ -28,6 +28,8 @@ else if (command === "start") runner = commandModule.runStart;
 else if (command === "stop") runner = commandModule.runStop;
 else if (command === "status") runner = commandModule.runStatus;
 else if (command === "upgrade") runner = commandModule.runUpgrade;
+else if (command === "register") runner = commandModule.runRegister;
+else if (command === "unregister") runner = commandModule.runUnregister;
 
 if (typeof runner !== "function") {
   console.error(`Internal error: could not find runner for command "${command}"`);

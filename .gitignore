@@ -55,3 +55,6 @@ openbao/init.json
 
 # Exclude test files with fake credential fixtures (triggers GitHub push protection)
 internal/sanitizer/sanitizer_test.go
+
+# npm test coverage output
+npm/*/coverage/
