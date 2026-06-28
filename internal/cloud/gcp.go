@@ -21,6 +21,37 @@ const (
 	gcpDefaultScope = "https://www.googleapis.com/auth/cloud-platform"
 )
 
+// gcpAllowedTokenHosts is the allowlist of legitimate Google OAuth2/STS token
+// endpoint hostnames. Only these hosts are accepted in the token_uri field of a
+// service account JSON file. The TokenEndpointOverride (used exclusively as a
+// test seam, never populated from user input) is NOT subject to this check.
+var gcpAllowedTokenHosts = map[string]bool{
+	"oauth2.googleapis.com":         true,
+	"accounts.google.com":           true,
+	"sts.googleapis.com":            true,
+	"iamcredentials.googleapis.com": true,
+}
+
+// validateSATokenURI validates the token_uri extracted from a user-supplied
+// service account JSON. It enforces:
+//
+//	(a) scheme must be "https"
+//	(b) host must be in gcpAllowedTokenHosts (allowlist of known Google endpoints)
+//	(c) TokenEndpointOverride (test seam, never user input) bypasses this
+func validateSATokenURI(rawURI string) error {
+	u, err := url.Parse(rawURI)
+	if err != nil {
+		return fmt.Errorf("cloud: gcp: token_uri is not a valid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("cloud: gcp: token_uri host %q is not an allowed Google endpoint (scheme must be https)", u.Host)
+	}
+	if !gcpAllowedTokenHosts[u.Hostname()] {
+		return fmt.Errorf("cloud: gcp: token_uri host %q is not an allowed Google endpoint", u.Host)
+	}
+	return nil
+}
+
 // GCPProviderConfig holds dependencies for the GCPProvider.
 type GCPProviderConfig struct {
 	// TokenEndpointOverride overrides the token_uri for testing. When empty,
@@ -113,6 +144,11 @@ func (p *GCPProvider) GenerateCredentials(ctx context.Context, cfg ServiceConfig
 		uri, ok := sa["token_uri"].(string)
 		if !ok || uri == "" {
 			return nil, fmt.Errorf("cloud: gcp: service account JSON missing token_uri")
+		}
+		// Validate the SA-JSON-derived token_uri against the allowlist to prevent
+		// SSRF. The TokenEndpointOverride (test seam only) skips this check.
+		if err := validateSATokenURI(uri); err != nil {
+			return nil, err
 		}
 		tokenURI = uri
 	}
