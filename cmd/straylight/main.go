@@ -14,19 +14,25 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/straylight-ai/straylight/internal/config"
+	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/datadir"
 	"github.com/straylight-ai/straylight/internal/egress"
+	"github.com/straylight-ai/straylight/internal/firewall"
+	"github.com/straylight-ai/straylight/internal/lease"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/oauth"
 	"github.com/straylight-ai/straylight/internal/oidc"
 	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/sanitizer"
+	"github.com/straylight-ai/straylight/internal/scanner"
 	"github.com/straylight-ai/straylight/internal/server"
 	"github.com/straylight-ai/straylight/internal/services"
 	"github.com/straylight-ai/straylight/internal/vault"
@@ -163,12 +169,41 @@ func newServeCmd() *cobra.Command {
 			p.SetPolicy(eng)                                   // pre-injection re-check at proxy seam
 			mcpHandler := mcp.NewHandler(p, registry)
 			mcpHandler.SetPolicy(eng, registry) // uniform dispatch gate at MCP seam
-			// NOTE: straylight_exec is intentionally left UNWIRED here. cmdwrap.NewWrapperWithGuard
-			// exists and applies an egress pre-flight, but activating exec (SetCommandExecutor) is
-			// deferred to issue #14 and MUST land together with a command allowlist and filesystem
-			// scoping — otherwise the AI could read the OpenBao unseal key via the exec path
-			// (cat <dataDir>/openbao/init.json bypasses the URL-only egress check).
-			// See docs/security/THREAT-MODEL.md §4.
+
+			// --- Phase 1: wire read_file (firewall) and scan (scanner) ---
+			//
+			// The firewall blocks the entire <dataDir>/openbao subtree (including
+			// init.json) via BlockedDirs and also blocks init.json by name via the
+			// default BlockedPatterns. This upholds the THREAT-MODEL §4 invariant:
+			// the OpenBao unseal key is unreachable by any MCP tool path.
+			fw := firewall.NewFirewall(firewall.FirewallConfig{
+				BlockedDirs: []string{filepath.Join(dataDir, "openbao")},
+				// BlockedPatterns and StructuredKeyPatterns use DefaultConfig values
+				// (NewFirewall fills them when the fields are empty).
+			})
+			mcpHandler.SetFileReader(fw)
+			mcpHandler.SetScanner(scanner.New())
+
+			// --- Phase 2: wire db_query (database.Manager) ---
+			//
+			// The Manager provisions short-lived read-only dynamic credentials from
+			// OpenBao and never returns the password to the AI. The policy engine
+			// (ADR-011) already gates db_query in dispatchToolCall. Credentials are
+			// revoked on shutdown via the defer chain below.
+			dbMgr := database.NewManager(&vaultDBAdapter{vc: vaultClient})
+			defer dbMgr.RevokeAll() // invalidate temporary DB users on shutdown
+			defer dbMgr.Close()     // stop the lease-renewal goroutine
+			mcpHandler.SetDBExecutor(dbMgr)
+
+			// --- Phase 3: straylight_exec is intentionally left UNWIRED ---
+			//
+			// Activating SetCommandExecutor requires privilege separation (running
+			// exec children as a lower-privileged uid/gid so the OpenBao init.json
+			// is unreadable by the child process — ADR-013 Part A, Option A2).
+			// That requires cap_add: [SETUID, SETGID] in the container, which is a
+			// runtime/Dockerfile change requiring maintainer confirmation (ADR-013
+			// §Maintainer confirmation). Until then, straylight_exec returns its stub.
+			// See docs/design/design-executor-wiring/adr/ADR-013-safe-data-plane-activation.md.
 
 			baseURL := fmt.Sprintf("http://localhost:%d", port)
 			oauthHandler := oauth.NewHandler(vaultClient, registry, baseURL)
@@ -233,6 +268,7 @@ func newServeCmd() *cobra.Command {
 				MCPHandler:    mcpHandler,
 				OIDCDiscovery: oidcDiscovery,
 				CloudManager:  cloudMgr,
+				DBManager:     dbMgr,
 			})
 			return srv.Run()
 		},
@@ -319,7 +355,7 @@ func newVersionCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			info := map[string]string{
 				"version": version,
-				"go":      "go1.24",
+				"go":      runtime.Version(),
 			}
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -369,6 +405,55 @@ func buildOIDCDiscovery(logger *slog.Logger, vaultClient *vault.Client, issuerUR
 		Keys:          oidcKeys,
 	}
 }
+
+// ---------------------------------------------------------------------------
+// vaultDBAdapter adapts *vault.Client to satisfy database.VaultClient.
+//
+// The only mismatch is RenewLease: vault.Client returns *vault.LeaseInfo while
+// database.VaultClient expects *lease.LeaseInfo. The two structs are field-for-
+// field identical (lease.go mirrors vault/lease.go to avoid a circular import).
+// ---------------------------------------------------------------------------
+
+// vaultDBAdapter wraps *vault.Client and satisfies database.VaultClient.
+type vaultDBAdapter struct {
+	vc *vault.Client
+}
+
+func (a *vaultDBAdapter) GetDynamicCredential(enginePath, roleName string) (map[string]interface{}, string, int, error) {
+	return a.vc.GetDynamicCredential(enginePath, roleName)
+}
+
+func (a *vaultDBAdapter) ConfigureDatabaseConnection(name, plugin, connURL string, allowedRoles []string, extra map[string]interface{}) error {
+	return a.vc.ConfigureDatabaseConnection(name, plugin, connURL, allowedRoles, extra)
+}
+
+func (a *vaultDBAdapter) CreateDatabaseRole(name, dbName string, creationStatements []string, defaultTTL, maxTTL string) error {
+	return a.vc.CreateDatabaseRole(name, dbName, creationStatements, defaultTTL, maxTTL)
+}
+
+// RenewLease converts *vault.LeaseInfo to *lease.LeaseInfo (same fields, different types).
+func (a *vaultDBAdapter) RenewLease(leaseID string, increment int) (*lease.LeaseInfo, error) {
+	info, err := a.vc.RenewLease(leaseID, increment)
+	if err != nil {
+		return nil, err
+	}
+	return &lease.LeaseInfo{
+		LeaseID:       info.LeaseID,
+		LeaseDuration: info.LeaseDuration,
+		Renewable:     info.Renewable,
+	}, nil
+}
+
+func (a *vaultDBAdapter) RevokeLease(leaseID string) error {
+	return a.vc.RevokeLease(leaseID)
+}
+
+func (a *vaultDBAdapter) RevokeLeasePrefix(prefix string) error {
+	return a.vc.RevokeLeasePrefix(prefix)
+}
+
+// Compile-time assertion that vaultDBAdapter satisfies database.VaultClient.
+var _ database.VaultClient = (*vaultDBAdapter)(nil)
 
 // ---------------------------------------------------------------------------
 // Minimal fallback cloud client stubs
