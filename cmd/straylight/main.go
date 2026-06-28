@@ -172,6 +172,28 @@ func newServeCmd() *cobra.Command {
 				}
 			}
 
+			// --- Issue #11: load community template registry (best-effort) ---
+			//
+			// Community templates live in <dataDir>/templates as *.yaml, *.yml,
+			// or *.json files. A missing or unreadable directory is silently
+			// ignored. Individual malformed files are logged and skipped; they
+			// never block startup. Built-ins always win on ID collision.
+			communityDir := filepath.Join(dataDir, "templates")
+			communityTemplates, loadErrs := services.LoadCommunityTemplates(communityDir)
+			for _, lerr := range loadErrs {
+				logger.Warn("community template skipped", "error", lerr)
+			}
+			mergedTemplates, mergeWarnings := services.MergeTemplates(services.ServiceTemplates, communityTemplates)
+			for _, w := range mergeWarnings {
+				logger.Warn("community template collision", "detail", w)
+			}
+			if len(communityTemplates) > 0 {
+				logger.Info("community templates loaded",
+					"community_count", len(communityTemplates),
+					"total_count", len(mergedTemplates),
+				)
+			}
+
 			san := sanitizer.NewSanitizer()
 			guard := egress.New()                              // default-deny SSRF denylist (ADR-010)
 			eng := policy.New()                                // per-service tool-call gate (ADR-011)
@@ -296,6 +318,8 @@ func newServeCmd() *cobra.Command {
 				OIDCDiscovery: oidcDiscovery,
 				CloudManager:  cloudMgr,
 				DBManager:     dbMgr,
+				EgressGuard:   guard,           // issue #11: use the same guard as the proxy
+				Templates:     mergedTemplates, // issue #11: built-ins + community catalog
 			})
 			return srv.Run()
 		},

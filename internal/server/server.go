@@ -13,6 +13,7 @@ import (
 	"github.com/straylight-ai/straylight/internal/audit"
 	"github.com/straylight-ai/straylight/internal/cloud"
 	"github.com/straylight-ai/straylight/internal/database"
+	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/oauth"
 	"github.com/straylight-ai/straylight/internal/oidc"
 	"github.com/straylight-ai/straylight/internal/services"
@@ -78,6 +79,16 @@ type Config struct {
 	// credentials for services opting in to the keyless path. When nil, the
 	// cloud credential generation path is not available.
 	CloudManager *cloud.Manager
+
+	// EgressGuard is the SSRF guard used by the import endpoint when fetching a
+	// remote OpenAPI spec. When nil, the default egress.New() guard is used.
+	EgressGuard egress.Guard
+
+	// Templates is the merged (built-ins + community) service template catalog
+	// served by the /api/v1/templates endpoint and template lookup. When nil,
+	// handlers fall back to services.ServiceTemplates. Prefer setting this via
+	// LoadCommunityTemplates + MergeTemplates at startup.
+	Templates []services.ServiceTemplate
 }
 
 // Options holds optional tuning parameters for the server's security middleware.

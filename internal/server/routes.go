@@ -57,6 +57,9 @@ func registerRoutes(s *Server) {
 		s.mux.HandleFunc("/api/v1/templates", s.handleNotImplemented)
 	}
 
+	// Import endpoint is always registered (does not require a registry).
+	s.mux.HandleFunc("POST /api/v1/templates/import", s.handleImportTemplate)
+
 	// Audit log endpoints (ADR-014).
 	if s.cfg.AuditLogger != nil {
 		s.mux.HandleFunc("GET /api/v1/audit/events", s.handleAuditEvents)
@@ -306,7 +309,7 @@ func (s *Server) handleCreateServiceWithAuth(w http.ResponseWriter, req createSe
 	// Validate: template must exist (if provided).
 	var tmpl *services.ServiceTemplate
 	if req.Template != "" {
-		t := findTemplate(req.Template)
+		t := s.findTemplate(req.Template)
 		if t == nil {
 			WriteError(w, http.StatusBadRequest, ErrCodeValidationFailed,
 				fmt.Sprintf("template %q not found", req.Template))
@@ -573,7 +576,11 @@ func (s *Server) handleRotateCredential(w http.ResponseWriter, r *http.Request) 
 // named-strategy auth methods are excluded, and templates with no remaining
 // methods are omitted entirely.
 func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
-	filtered := services.FilterTemplatesForPersonalTier(services.ServiceTemplates)
+	catalog := services.ServiceTemplates
+	if s.cfg.Templates != nil {
+		catalog = s.cfg.Templates
+	}
+	filtered := services.FilterTemplatesForPersonalTier(catalog)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"templates": filtered})
 }
 
@@ -581,7 +588,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 // Returns a single ServiceTemplate by its ID, including all auth methods.
 func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	tmpl := findTemplate(name)
+	tmpl := s.findTemplate(name)
 	if tmpl == nil {
 		WriteError(w, http.StatusNotFound, ErrCodeServiceNotFound, fmt.Sprintf("template %q not found", name))
 		return
@@ -955,10 +962,28 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 // findTemplate looks up a ServiceTemplate by its ID in the built-in catalog.
 // Returns nil if no template with the given ID exists.
+// Deprecated: prefer (*Server).findTemplate which respects Config.Templates.
 func findTemplate(id string) *services.ServiceTemplate {
 	for i := range services.ServiceTemplates {
 		if services.ServiceTemplates[i].ID == id {
 			return &services.ServiceTemplates[i]
+		}
+	}
+	return nil
+}
+
+// findTemplate looks up a ServiceTemplate by its ID. When Config.Templates is
+// non-nil (i.e. a merged community catalog was injected at startup), it is
+// searched first and is authoritative. Falls back to services.ServiceTemplates
+// when Config.Templates is nil (default/test mode without community templates).
+func (s *Server) findTemplate(id string) *services.ServiceTemplate {
+	catalog := services.ServiceTemplates
+	if s.cfg.Templates != nil {
+		catalog = s.cfg.Templates
+	}
+	for i := range catalog {
+		if catalog[i].ID == id {
+			return &catalog[i]
 		}
 	}
 	return nil

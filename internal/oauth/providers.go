@@ -26,15 +26,31 @@ type Provider struct {
 	// need to register their own OAuth App for providers that support device flow.
 	// Override at runtime with the STRAYLIGHT_GITHUB_CLIENT_ID env var.
 	DefaultClientID string
+
+	// Wave 2 additive fields (all zero-value by default; backward-compatible).
+
+	// PKCE indicates whether the authorization code flow requires PKCE (S256 challenge).
+	// Defaults to false. Set to true for providers that require or strongly prefer PKCE.
+	PKCE bool
+
+	// TokenParser is a bounded template expression evaluated against the parsed
+	// token-response JSON to extract the access token when a provider does not return
+	// the standard RFC 6749 shape. Example: "{{.authed_user.access_token}}" for Slack.
+	// Empty string means use the standard "access_token" field.
+	TokenParser string
+
+	// DiscoveryURL is an OIDC well-known discovery URL that can be fetched (SSRF-gated)
+	// at load time to auto-fill AuthURL and TokenURL when they are absent.
+	DiscoveryURL string
 }
 
 // Providers is the registry of supported OAuth providers.
 // Tests may temporarily override this variable to inject a fake token server.
 var Providers = map[string]Provider{
 	"github": {
-		Name:          "github",
-		AuthURL:       "https://github.com/login/oauth/authorize",
-		TokenURL:      "https://github.com/login/oauth/access_token",
+		Name:     "github",
+		AuthURL:  "https://github.com/login/oauth/authorize",
+		TokenURL: "https://github.com/login/oauth/access_token",
 		// DeviceCodeURL enables the zero-config Device Authorization Flow (RFC 8628).
 		// Users see "Go to github.com/login/device and enter XXXX-XXXX" instead
 		// of being asked to register their own OAuth App.
@@ -46,9 +62,9 @@ var Providers = map[string]Provider{
 		DefaultClientID: "",
 	},
 	"google": {
-		Name:          "google",
-		AuthURL:       "https://accounts.google.com/o/oauth2/v2/auth",
-		TokenURL:      "https://oauth2.googleapis.com/token",
+		Name:     "google",
+		AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
+		TokenURL: "https://oauth2.googleapis.com/token",
 		// DeviceCodeURL enables the zero-config Device Authorization Flow (RFC 8628).
 		// Note: Google's device code response uses "verification_url" instead of
 		// "verification_uri" — the handler normalizes this field name.
