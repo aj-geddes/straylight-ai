@@ -113,7 +113,7 @@ type AuthMethod struct {
 	TokenPrefix string            `json:"token_prefix,omitempty" yaml:"token_prefix,omitempty"`
 	// KeyURL is an optional URL where the user can obtain or manage the credential.
 	// Displayed as a "Where do I get this?" link in the credential form.
-	KeyURL      string            `json:"key_url,omitempty"      yaml:"key_url,omitempty"`
+	KeyURL string `json:"key_url,omitempty"      yaml:"key_url,omitempty"`
 }
 
 // CredentialField describes one input the user must provide for an auth method.
@@ -586,9 +586,11 @@ var ServiceTemplates = []ServiceTemplate{
 				ID:          "aws_access_key",
 				Name:        "Access Key + Secret Key",
 				Description: "IAM user access key pair",
+				KeyURL:      "https://console.aws.amazon.com/iam/home#/security_credentials",
 				Fields: []CredentialField{
-					{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Placeholder: "AKIAIOSFODNN7EXAMPLE", Required: true, Pattern: `^AKIA[0-9A-Z]{16}$`},
-					{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Placeholder: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", Required: true},
+					{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Placeholder: "AKIAIOSFODNN7EXAMPLE", Required: true, Pattern: `^AKIA[0-9A-Z]{16}$`, HelpText: "20-character key starting with AKIA"},
+					{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Placeholder: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", Required: true, HelpText: "40-character secret key"},
+					{Key: "region", Label: "Default Region", Type: FieldText, Placeholder: "us-east-1", Required: false, HelpText: "e.g., us-east-1, eu-west-2"},
 				},
 				Injection: InjectionConfig{Type: InjectionNamedStrategy, Strategy: "aws_sigv4"},
 			},
@@ -597,11 +599,22 @@ var ServiceTemplates = []ServiceTemplate{
 				Name:        "Session Token (STS)",
 				Description: "Temporary credentials with session token",
 				Fields: []CredentialField{
-					{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Required: true},
-					{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Required: true},
-					{Key: "session_token", Label: "Session Token", Type: FieldPassword, Required: true},
+					{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Placeholder: "ASIAIOSFODNN7EXAMPLE", Required: true, HelpText: "Temporary key starting with ASIA"},
+					{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Required: true, HelpText: "40-character secret key"},
+					{Key: "session_token", Label: "Session Token", Type: FieldTextarea, Required: true, HelpText: "Temporary session token from STS"},
+					{Key: "region", Label: "Default Region", Type: FieldText, Placeholder: "us-east-1", Required: false},
 				},
 				Injection: InjectionConfig{Type: InjectionNamedStrategy, Strategy: "aws_sigv4"},
+			},
+			{
+				ID:          "aws_profile",
+				Name:        "Profile Name",
+				Description: "Reference an existing AWS CLI profile",
+				Fields: []CredentialField{
+					{Key: "profile", Label: "Profile Name", Type: FieldText, Placeholder: "default", Required: true, HelpText: "Name of the profile in ~/.aws/credentials"},
+					{Key: "region", Label: "Default Region", Type: FieldText, Placeholder: "us-east-1", Required: false},
+				},
+				Injection: InjectionConfig{Type: InjectionNamedStrategy, Strategy: "connection_string"},
 			},
 		},
 	},
@@ -619,49 +632,6 @@ var ServiceTemplates = []ServiceTemplate{
 				Fields:      []CredentialField{},
 				Injection:   InjectionConfig{Type: InjectionOAuth},
 				AutoRefresh: true,
-			},
-		},
-	},
-	{
-		ID:          "aws",
-		DisplayName: "AWS",
-		Description: "Amazon Web Services (S3, EC2, Lambda, etc.)",
-		Icon:        "aws",
-		Target:      "",
-		AuthMethods: []AuthMethod{
-			{
-				ID:          "aws_access_key",
-				Name:        "Access Key",
-				Description: "IAM access key pair (most common)",
-				KeyURL:      "https://console.aws.amazon.com/iam/home#/security_credentials",
-				Fields: []CredentialField{
-					{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Placeholder: "AKIAIOSFODNN7EXAMPLE", Required: true, Pattern: `^AKIA[A-Z0-9]{16}$`, HelpText: "20-character key starting with AKIA"},
-					{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Placeholder: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", Required: true, HelpText: "40-character secret key"},
-					{Key: "region", Label: "Default Region", Type: FieldText, Placeholder: "us-east-1", Required: false, HelpText: "e.g., us-east-1, eu-west-2"},
-				},
-				Injection: InjectionConfig{Type: InjectionNamedStrategy, Strategy: "connection_string"},
-			},
-			{
-				ID:          "aws_session",
-				Name:        "Session Credentials",
-				Description: "Temporary credentials with session token (STS)",
-				Fields: []CredentialField{
-					{Key: "access_key_id", Label: "Access Key ID", Type: FieldText, Placeholder: "ASIAIOSFODNN7EXAMPLE", Required: true, HelpText: "Temporary key starting with ASIA"},
-					{Key: "secret_access_key", Label: "Secret Access Key", Type: FieldPassword, Required: true},
-					{Key: "session_token", Label: "Session Token", Type: FieldTextarea, Required: true, HelpText: "Temporary session token from STS"},
-					{Key: "region", Label: "Default Region", Type: FieldText, Placeholder: "us-east-1", Required: false},
-				},
-				Injection: InjectionConfig{Type: InjectionNamedStrategy, Strategy: "connection_string"},
-			},
-			{
-				ID:          "aws_profile",
-				Name:        "Profile Name",
-				Description: "Reference an existing AWS CLI profile",
-				Fields: []CredentialField{
-					{Key: "profile", Label: "Profile Name", Type: FieldText, Placeholder: "default", Required: true, HelpText: "Name of the profile in ~/.aws/credentials"},
-					{Key: "region", Label: "Default Region", Type: FieldText, Placeholder: "us-east-1", Required: false},
-				},
-				Injection: InjectionConfig{Type: InjectionNamedStrategy, Strategy: "connection_string"},
 			},
 		},
 	},

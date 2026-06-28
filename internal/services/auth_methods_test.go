@@ -435,6 +435,49 @@ func TestServiceTemplates_GitLabPATUsesCustomHeader(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ServiceTemplates catalog integrity
+// ---------------------------------------------------------------------------
+
+// TestServiceTemplates_NoDuplicateTemplateIDs verifies that all ServiceTemplates have unique IDs.
+func TestServiceTemplates_NoDuplicateTemplateIDs(t *testing.T) {
+	seen := make(map[string]int)
+	for i, tmpl := range services.ServiceTemplates {
+		if firstIndex, exists := seen[tmpl.ID]; exists {
+			t.Errorf("ServiceTemplates[%d].ID %q duplicates ServiceTemplates[%d] — each template must have a unique id", i, tmpl.ID, firstIndex)
+		} else {
+			seen[tmpl.ID] = i
+		}
+	}
+}
+
+// TestServiceTemplates_AWSTemplateMerged verifies that the AWS template contains the expected auth method IDs and validates successfully.
+func TestServiceTemplates_AWSTemplateMerged(t *testing.T) {
+	tmpl := findTemplate(t, "aws")
+
+	expectedAuthMethodIDs := map[string]bool{
+		"aws_access_key":    false,
+		"aws_session_token": false,
+		"aws_profile":       false,
+	}
+
+	for _, am := range tmpl.AuthMethods {
+		if _, ok := expectedAuthMethodIDs[am.ID]; ok {
+			expectedAuthMethodIDs[am.ID] = true
+		}
+	}
+
+	for id, found := range expectedAuthMethodIDs {
+		if !found {
+			t.Errorf("expected AWS template to contain auth method %q", id)
+		}
+	}
+
+	if err := services.ValidateTemplate(tmpl); err != nil {
+		t.Errorf("ValidateTemplate() returned unexpected error for AWS template: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // InjectionType constants existence
 // ---------------------------------------------------------------------------
 
