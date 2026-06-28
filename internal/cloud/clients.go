@@ -194,7 +194,7 @@ func (c *AzureHTTPTokenClient) ExchangeToken(ctx context.Context, in tokenexchan
 	tokenURL := fmt.Sprintf("%s/%s/oauth2/v2.0/token", c.baseURL, url.PathEscape(in.TenantID))
 
 	form := url.Values{}
-	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
+	form.Set("grant_type", "client_credentials") // Azure AD requires client_credentials for RFC 7523 client-assertion (FIC/keyless) flow
 	form.Set("client_id", in.ClientID)
 	form.Set("scope", in.Scope)
 	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")

@@ -88,3 +88,35 @@ func TestOIDCConfig_RequiredFields(t *testing.T) {
 		}
 	}
 }
+
+// TestOIDCConfig_TokenEndpointAuthMethods asserts that the discovery document
+// does not advertise client_secret_basic (this is an identity-proof-only issuer
+// with no token endpoint) and does advertise private_key_jwt.
+func TestOIDCConfig_TokenEndpointAuthMethods(t *testing.T) {
+	d := &oidc.Discovery{IssuerURL: "https://ex.com"}
+	cfg := d.OIDCConfig()
+
+	methods, ok := cfg["token_endpoint_auth_methods_supported"].([]string)
+	if !ok {
+		t.Fatal("token_endpoint_auth_methods_supported is not a []string")
+	}
+
+	for _, m := range methods {
+		if m == "client_secret_basic" {
+			t.Errorf("token_endpoint_auth_methods_supported must not contain %q "+
+				"(this issuer is identity-proof-only, not a token endpoint)", m)
+		}
+	}
+
+	foundPrivateKeyJWT := false
+	for _, m := range methods {
+		if m == "private_key_jwt" {
+			foundPrivateKeyJWT = true
+			break
+		}
+	}
+	if !foundPrivateKeyJWT {
+		t.Errorf("token_endpoint_auth_methods_supported must contain %q, got %v",
+			"private_key_jwt", methods)
+	}
+}

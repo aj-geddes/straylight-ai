@@ -196,3 +196,68 @@ func TestAWSWebIdentityAdapter_MissingRoleARN(t *testing.T) {
 		t.Error("STS should not be called when role_arn is missing")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestAWSWebIdentityAdapter_DurationSecs_Cap — duration_secs above the STS max
+// of 43200 must be clamped to 43200 (never sent as-is to avoid a clear STS
+// error; reject-on-misconfiguration makes failures visible immediately).
+// ---------------------------------------------------------------------------
+
+// TestAWSWebIdentityAdapter_DurationSecs_Clamped verifies that a duration_secs
+// above the STS maximum of 43200 is clamped to 43200.
+func TestAWSWebIdentityAdapter_DurationSecs_Clamped(t *testing.T) {
+	fakeSTS := &fakeSTSWebIdentityClient{}
+	a := tokenexchange.NewAWSWebIdentityAdapter(fakeSTS)
+
+	in := tokenexchange.ExchangeInput{
+		Proof: &tokenexchange.IdentityProof{
+			Token:     "tok",
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		},
+		Audience: "sts.amazonaws.com",
+		Params: map[string]string{
+			"role_arn":      "arn:aws:iam::123456789012:role/R",
+			"duration_secs": "99999", // over the STS maximum of 43200
+		},
+	}
+
+	_, err := a.Exchange(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Exchange() error = %v; expected clamp, not error", err)
+	}
+
+	// The value forwarded to STS must be clamped at 43200.
+	const awsSTSMaxDurationSecs = int32(43200)
+	if fakeSTS.lastInput.DurationSeconds > awsSTSMaxDurationSecs {
+		t.Errorf("DurationSeconds = %d forwarded to STS; must be <= %d (STS max)",
+			fakeSTS.lastInput.DurationSeconds, awsSTSMaxDurationSecs)
+	}
+}
+
+// TestAWSWebIdentityAdapter_DurationSecs_ExactMax verifies that exactly 43200
+// passes through unchanged.
+func TestAWSWebIdentityAdapter_DurationSecs_ExactMax(t *testing.T) {
+	fakeSTS := &fakeSTSWebIdentityClient{}
+	a := tokenexchange.NewAWSWebIdentityAdapter(fakeSTS)
+
+	in := tokenexchange.ExchangeInput{
+		Proof: &tokenexchange.IdentityProof{
+			Token:     "tok",
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		},
+		Audience: "sts.amazonaws.com",
+		Params: map[string]string{
+			"role_arn":      "arn:aws:iam::123456789012:role/R",
+			"duration_secs": "43200",
+		},
+	}
+
+	_, err := a.Exchange(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Exchange() error = %v", err)
+	}
+
+	if fakeSTS.lastInput.DurationSeconds != 43200 {
+		t.Errorf("DurationSeconds = %d, want 43200", fakeSTS.lastInput.DurationSeconds)
+	}
+}

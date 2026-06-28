@@ -17,6 +17,11 @@ const awsDefaultRegion = "us-east-1"
 // awsDefaultDurationSecs is the STS session duration used when not specified.
 const awsDefaultDurationSecs int32 = 900
 
+// awsMaxDurationSecs is the maximum STS session duration (12 hours). Values
+// above this are clamped to 43200 so misconfigurations fail clearly at the
+// adapter layer rather than returning an opaque STS ValidationError.
+const awsMaxDurationSecs int32 = 43200
+
 // STSAssumeRoleWithWebIdentityInput holds the parameters for an STS
 // AssumeRoleWithWebIdentity call, keeping the AWS SDK behind this interface.
 type STSAssumeRoleWithWebIdentityInput struct {
@@ -101,6 +106,10 @@ func (a *AWSWebIdentityAdapter) Exchange(ctx context.Context, in ExchangeInput) 
 		if err == nil && parsed > 0 {
 			duration = int32(parsed)
 		}
+	}
+	// Clamp to the STS maximum to avoid an opaque ValidationError from AWS.
+	if duration > awsMaxDurationSecs {
+		duration = awsMaxDurationSecs
 	}
 
 	stsIn := STSAssumeRoleWithWebIdentityInput{

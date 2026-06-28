@@ -183,10 +183,17 @@ type cacheEntry struct {
 
 // Manager coordinates cloud providers and caches temp credentials.
 // It is safe for concurrent use.
+//
+// Lifecycle: CloudManager is wired at startup (see cmd/straylight/main.go and
+// server.Config.CloudManager) but is not yet dispatched from any route handler.
+// Dispatching is pending straylight_exec wiring in issue #14. The Engine that
+// backs the keyless providers runs a background refresh goroutine; callers must
+// call Close when the server shuts down to stop that goroutine cleanly.
 type Manager struct {
 	mu        sync.RWMutex
 	providers map[string]Provider    // keyed by cloud type ("aws", "gcp", "azure")
 	cache     map[string]*cacheEntry // keyed by service name
+	stopFn    func()                 // stops background goroutines (Engine.Close); may be nil
 }
 
 // NewManager creates a Manager with the given providers.
@@ -195,6 +202,23 @@ func NewManager(providers map[string]Provider) *Manager {
 	return &Manager{
 		providers: providers,
 		cache:     make(map[string]*cacheEntry),
+	}
+}
+
+// newManagerWithStop creates a Manager that calls stopFn when Close is called.
+// Used by BuildKeylessCloudManager to stop the Engine's background goroutine.
+func newManagerWithStop(providers map[string]Provider, stopFn func()) *Manager {
+	m := NewManager(providers)
+	m.stopFn = stopFn
+	return m
+}
+
+// Close stops any background goroutines owned by this Manager (e.g. the
+// token-exchange Engine's refresh goroutine). Safe to call multiple times.
+// Call Close from the server's graceful-shutdown path to prevent goroutine leaks.
+func (m *Manager) Close() {
+	if m.stopFn != nil {
+		m.stopFn()
 	}
 }
 

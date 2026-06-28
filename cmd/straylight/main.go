@@ -209,6 +209,11 @@ func newServeCmd() *cobra.Command {
 			gcpSTSClient := cloud.NewGCPSTSClient(nil, "")
 			azureTokenClient := cloud.NewAzureHTTPTokenClient(nil, "")
 
+			// CloudManager is wired into server.Config so route handlers can reach it,
+			// but no route handler dispatches to it yet -- that is pending the
+			// straylight_exec wiring in issue #14. The Manager owns a token-exchange
+			// Engine that runs a background refresh goroutine; Close is called via
+			// defer below so the goroutine does not outlive the serve command.
 			cloudMgr := cloud.BuildKeylessCloudManager(
 				vaultClient,
 				"straylight",
@@ -217,6 +222,7 @@ func newServeCmd() *cobra.Command {
 				azureTokenClient,
 				staticSTSClient,
 			)
+			defer cloudMgr.Close() // stops the Engine background refresh goroutine on shutdown
 
 			srv := server.New(server.Config{
 				ListenAddress: listenAddr,

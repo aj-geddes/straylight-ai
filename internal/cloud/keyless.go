@@ -62,10 +62,12 @@ func BuildKeylessCloudManager(
 		Engine: engine,
 	})
 
-	// 5. Manager that dispatches by cloud type.
-	return NewManager(map[string]Provider{
+	// 5. Manager that dispatches by cloud type. The Engine starts a background
+	// refresh goroutine; the manager's Close method stops it. Callers must call
+	// Close when the server shuts down (see cmd/straylight/main.go).
+	return newManagerWithStop(map[string]Provider{
 		"aws":   awsProvider,
 		"gcp":   gcpProvider,
 		"azure": azureProvider,
-	})
+	}, engine.Close)
 }

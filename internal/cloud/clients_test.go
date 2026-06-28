@@ -136,7 +136,10 @@ func TestAzureHTTPTokenClient_ExchangeToken_RequestShape(t *testing.T) {
 		scope           = "https://management.azure.com/.default"
 		clientAssertion = "fake-oidc-jwt-assertion"
 
-		wantGrantType     = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+		// Azure AD client-credentials-with-assertion flow (RFC 7523 §2.2).
+		// The grant_type MUST be "client_credentials", NOT the legacy
+		// "urn:ietf:params:oauth:grant-type:jwt-bearer" (which Azure rejects).
+		wantGrantType     = "client_credentials"
 		wantAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 	)
 
@@ -189,7 +192,9 @@ func TestAzureHTTPTokenClient_ExchangeToken_RequestShape(t *testing.T) {
 	if got := captured.Get("client_assertion_type"); got != wantAssertionType {
 		t.Errorf("client_assertion_type = %q, want %q", got, wantAssertionType)
 	}
-	if got := captured.Get("client_assertion"); got != clientAssertion {
+	if got := captured.Get("client_assertion"); got == "" {
+		t.Error("client_assertion must not be empty in request")
+	} else if got != clientAssertion {
 		t.Errorf("client_assertion = %q, want %q", got, clientAssertion)
 	}
 	if got := captured.Get("client_id"); got != clientID {
@@ -238,6 +243,79 @@ func TestAzureHTTPTokenClient_DefaultEndpoint(t *testing.T) {
 	c := cloud.NewAzureHTTPTokenClient(nil, "")
 	if c == nil {
 		t.Fatal("NewAzureHTTPTokenClient returned nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GCP STS coverage: error branches
+// ---------------------------------------------------------------------------
+
+// TestGCPSTSClient_ExchangeToken_EmptyAccessToken asserts that a 200 response
+// with a missing or empty access_token field surfaces as an error.
+func TestGCPSTSClient_ExchangeToken_EmptyAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	c := cloud.NewGCPSTSClient(nil, srv.URL)
+	_, err := c.ExchangeToken(context.Background(), tokenexchange.GCPTokenExchangeInput{
+		Audience:     "//iam.googleapis.com/projects/1",
+		SubjectToken: "tok",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty access_token in 200 response, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Azure HTTP token coverage: error branches
+// ---------------------------------------------------------------------------
+
+// TestAzureHTTPTokenClient_ExchangeToken_MissingAccessToken asserts that a 200
+// response with an absent or empty access_token field surfaces as an error.
+func TestAzureHTTPTokenClient_ExchangeToken_MissingAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer srv.Close()
+
+	c := cloud.NewAzureHTTPTokenClient(nil, srv.URL)
+	_, err := c.ExchangeToken(context.Background(), tokenexchange.AzureTokenExchangeInput{
+		TenantID:        "tenant",
+		ClientID:        "client",
+		Scope:           "https://management.azure.com/.default",
+		ClientAssertion: "tok",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing access_token in 200 response, got nil")
+	}
+}
+
+// TestAzureHTTPTokenClient_ExchangeToken_NonJSONErrorBody asserts that a
+// non-JSON response body (e.g. a WAF HTML page) returns a parse error and does
+// not panic.
+func TestAzureHTTPTokenClient_ExchangeToken_NonJSONErrorBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<html><body>Access Denied</body></html>`))
+	}))
+	defer srv.Close()
+
+	c := cloud.NewAzureHTTPTokenClient(nil, srv.URL)
+	_, err := c.ExchangeToken(context.Background(), tokenexchange.AzureTokenExchangeInput{
+		TenantID:        "tenant",
+		ClientID:        "client",
+		Scope:           "https://management.azure.com/.default",
+		ClientAssertion: "tok",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-JSON body in 200 response, got nil")
 	}
 }
 

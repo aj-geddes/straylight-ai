@@ -240,3 +240,63 @@ func TestJWKS_WhenNotConfigured(t *testing.T) {
 		t.Fatalf("expected 404 or 501 when OIDCDiscovery is not configured, got %d", w.Code)
 	}
 }
+
+// TestOIDCDiscovery_CacheControlHeader asserts that the openid-configuration
+// endpoint sets a Cache-Control header allowing cloud-provider caching while
+// bounding JWKS staleness after key rotation.
+func TestOIDCDiscovery_CacheControlHeader(t *testing.T) {
+	const wantCacheControl = "public, max-age=3600, stale-while-revalidate=300"
+
+	cfg := server.Config{
+		OIDCDiscovery: &oidc.Discovery{
+			IssuerURL:     "https://straylight.example.com",
+			JWKSURI:       "https://straylight.example.com/.well-known/jwks.json",
+			SupportedAlgs: []string{"RS256"},
+		},
+	}
+
+	s := server.New(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
+	w := httptest.NewRecorder()
+
+	s.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	got := w.Header().Get("Cache-Control")
+	if got != wantCacheControl {
+		t.Errorf("Cache-Control = %q, want %q", got, wantCacheControl)
+	}
+}
+
+// TestJWKS_CacheControlHeader asserts that the JWKS endpoint sets the same
+// Cache-Control header as the discovery endpoint.
+func TestJWKS_CacheControlHeader(t *testing.T) {
+	const wantCacheControl = "public, max-age=3600, stale-while-revalidate=300"
+
+	cfg := server.Config{
+		OIDCDiscovery: &oidc.Discovery{
+			IssuerURL:     "https://straylight.example.com",
+			JWKSURI:       "https://straylight.example.com/.well-known/jwks.json",
+			SupportedAlgs: []string{"RS256"},
+			Keys:          []oidc.JWKKey{{Kty: "RSA", Kid: "k1"}},
+		},
+	}
+
+	s := server.New(cfg)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
+	w := httptest.NewRecorder()
+
+	s.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	got := w.Header().Get("Cache-Control")
+	if got != wantCacheControl {
+		t.Errorf("Cache-Control = %q, want %q", got, wantCacheControl)
+	}
+}

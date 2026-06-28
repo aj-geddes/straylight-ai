@@ -2,6 +2,13 @@ package server
 
 import "net/http"
 
+// oidcCacheControl is the Cache-Control header value for OIDC discovery
+// endpoints. It allows cloud providers to cache the discovery document and
+// JWKS for up to one hour while serving stale content for up to 5 minutes
+// after a key rotation (stale-while-revalidate). This bounds key-rotation
+// staleness to 300 seconds without forcing providers to refetch on every call.
+const oidcCacheControl = "public, max-age=3600, stale-while-revalidate=300"
+
 // registerOIDCRoutes registers the public OIDC discovery and JWKS endpoints.
 // Both paths are always registered; when OIDCDiscovery is nil they return 404.
 // These endpoints are unauthenticated by design — cloud providers fetch them
@@ -19,6 +26,7 @@ func (s *Server) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", oidcCacheControl)
 	writeJSON(w, http.StatusOK, s.cfg.OIDCDiscovery.OIDCConfig())
 }
 
@@ -30,5 +38,6 @@ func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	w.Header().Set("Cache-Control", oidcCacheControl)
 	writeJSON(w, http.StatusOK, s.cfg.OIDCDiscovery.PublicJWKS())
 }
