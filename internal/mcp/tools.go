@@ -892,8 +892,10 @@ func buildDriverDSN(cfg database.DatabaseConfig, username, password string) (dri
 	}
 }
 
-// executeQuery opens a database connection, executes a parameterized query,
-// scans all rows up to maxRows, and returns a QueryResult.
+// executeQuery opens a database connection, executes a parameterized query inside
+// a READ ONLY transaction, scans all rows up to maxRows, and returns a QueryResult.
+// The READ ONLY transaction is a defense-in-depth measure: even if the Vault role
+// grant allows only SELECT, the database engine enforces read-only mode independently.
 // The connection is closed before returning.
 func executeQuery(ctx context.Context, driverName, dsn, query string, params []interface{}, maxRows int) (*database.QueryResult, error) {
 	sqlDB, err := sql.Open(driverName, dsn)
@@ -906,6 +908,52 @@ func executeQuery(ctx context.Context, driverName, dsn, query string, params []i
 	sqlDB.SetMaxIdleConns(0)
 	sqlDB.SetConnMaxLifetime(30 * time.Second)
 
+	// Begin a READ ONLY transaction so the database engine enforces read-only mode
+	// independently of the Vault role grant. This prevents accidents or privilege
+	// escalation where the Vault role is misconfigured with write permissions.
+	tx, err := sqlDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		// Some engines (e.g. older MySQL) do not support the TxOptions.ReadOnly
+		// flag via the driver. Fall back to an explicit SET TRANSACTION statement.
+		tx2, err2 := sqlDB.BeginTx(ctx, nil)
+		if err2 != nil {
+			return nil, fmt.Errorf("begin tx: %w", err2)
+		}
+		if _, setErr := tx2.ExecContext(ctx, "SET TRANSACTION READ ONLY"); setErr != nil {
+			_ = tx2.Rollback()
+			// If SET TRANSACTION READ ONLY is unsupported (e.g. SQLite in tests),
+			// fall back to a regular read that relies on the Vault role grant alone.
+			return executeQueryDirect(ctx, sqlDB, query, params, maxRows)
+		}
+		tx = tx2
+	}
+	defer func() { _ = tx.Rollback() }() // no-op if already committed or query-only
+
+	rows, err := tx.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+
+	cols, data, err := database.ScanRows(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// READ ONLY transactions do not need a Commit for SELECT-only workloads;
+	// the deferred Rollback is a no-op because the tx was never written to.
+	// Enforce max_rows after scanning.
+	data = database.ApplyMaxRows(data, maxRows)
+
+	return &database.QueryResult{
+		Columns:  cols,
+		Rows:     data,
+		RowCount: len(data),
+	}, nil
+}
+
+// executeQueryDirect runs a query on the plain connection (no read-only tx).
+// Used as a fallback when the database engine does not support read-only transactions.
+func executeQueryDirect(ctx context.Context, sqlDB *sql.DB, query string, params []interface{}, maxRows int) (*database.QueryResult, error) {
 	rows, err := sqlDB.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -916,9 +964,7 @@ func executeQuery(ctx context.Context, driverName, dsn, query string, params []i
 		return nil, err
 	}
 
-	// Enforce max_rows after scanning.
 	data = database.ApplyMaxRows(data, maxRows)
-
 	return &database.QueryResult{
 		Columns:  cols,
 		Rows:     data,

@@ -13,7 +13,13 @@ import (
 // newValidWrapper returns a Wrapper with a valid github service and credential.
 // It configures child credential and auto-approver for ADR-013 fail-closed gates.
 func newValidWrapper() *cmdwrap.Wrapper {
-	svc := services.Service{Name: "github", Type: "http_proxy"}
+	// AllowedCommands is required now that the allowlist is sourced from svc (not req).
+	svc := services.Service{
+		Name:            "github",
+		Type:            "http_proxy",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"echo", "printenv", "false"},
+	}
 	resolver := &fakeResolver{
 		credentials: map[string]string{"github": "secrettoken"},
 		svcs:        map[string]services.Service{"github": svc},

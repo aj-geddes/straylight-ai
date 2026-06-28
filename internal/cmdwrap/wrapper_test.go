@@ -86,9 +86,13 @@ const testSecret = "supersecret1234"
 // uid/gid) and an auto-approver so that the ADR-013 fail-closed gates do not
 // block tests that are not specifically testing those guards.
 func newTestWrapper(secret string) *cmdwrap.Wrapper {
+	// AllowedCommands covers all binaries used in the wrapper_test.go test suite.
+	// The allowlist is now sourced from svc (not req) as part of the security fix.
 	svc := services.Service{
-		Name: "github",
-		Type: "http_proxy",
+		Name:            "github",
+		Type:            "http_proxy",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"printenv", "echo", "false", "sleep", "dd", "true"},
 	}
 
 	resolver := &fakeResolver{
@@ -230,17 +234,19 @@ func TestExecuteTimeout(t *testing.T) {
 	}
 }
 
-// TestExecuteAllowlistEnforced verifies that a command not in the allowlist
-// returns a clear error and does not run.
+// TestExecuteAllowlistEnforced verifies that a command not in the service's
+// AllowedCommands list is rejected. The allowlist is now sourced from the
+// service configuration (svc.AllowedCommands), not req.AllowedCommands.
+// "ls" is not in the newTestWrapper service allowlist, so it is blocked.
 func TestExecuteAllowlistEnforced(t *testing.T) {
 	w := newTestWrapper(testSecret)
 
 	req := cmdwrap.ExecRequest{
-		Service:         "github",
-		Command:         "ls -la",
-		EnvVar:          "GH_TOKEN",
-		TimeoutSeconds:  5,
-		AllowedCommands: []string{"echo", "printenv"},
+		Service:        "github",
+		Command:        "ls -la",
+		EnvVar:         "GH_TOKEN",
+		TimeoutSeconds: 5,
+		// AllowedCommands in the request is ignored — svc.AllowedCommands controls access.
 	}
 
 	_, err := w.Execute(context.Background(), req)
@@ -255,17 +261,17 @@ func TestExecuteAllowlistEnforced(t *testing.T) {
 	}
 }
 
-// TestExecuteAllowlistPermitted verifies that a command in the allowlist runs
-// successfully.
+// TestExecuteAllowlistPermitted verifies that a command in the service's
+// AllowedCommands list runs successfully.
 func TestExecuteAllowlistPermitted(t *testing.T) {
 	w := newTestWrapper(testSecret)
 
 	req := cmdwrap.ExecRequest{
-		Service:         "github",
-		Command:         "echo allowed",
-		EnvVar:          "GH_TOKEN",
-		TimeoutSeconds:  5,
-		AllowedCommands: []string{"echo", "printenv"},
+		Service:        "github",
+		Command:        "echo allowed",
+		EnvVar:         "GH_TOKEN",
+		TimeoutSeconds: 5,
+		// echo is in the service's AllowedCommands list (see newTestWrapper).
 	}
 
 	resp, err := w.Execute(context.Background(), req)
@@ -280,21 +286,26 @@ func TestExecuteAllowlistPermitted(t *testing.T) {
 	}
 }
 
-// TestExecuteAllowlistEmpty verifies that an empty allowlist allows all commands.
-func TestExecuteAllowlistEmpty(t *testing.T) {
+// TestExecuteAllowlistControlledByService verifies that the service's
+// AllowedCommands list — not req.AllowedCommands — controls which commands run.
+// The req.AllowedCommands field is now ignored; the service config is authoritative.
+// A command in the service allowlist succeeds even when req.AllowedCommands is nil.
+func TestExecuteAllowlistControlledByService(t *testing.T) {
 	w := newTestWrapper(testSecret)
 
 	req := cmdwrap.ExecRequest{
-		Service:         "github",
-		Command:         "echo anything",
-		EnvVar:          "GH_TOKEN",
-		TimeoutSeconds:  5,
-		AllowedCommands: nil, // empty = no restriction
+		Service:        "github",
+		Command:        "echo anything",
+		EnvVar:         "GH_TOKEN",
+		TimeoutSeconds: 5,
+		// AllowedCommands in the request is ignored (security fix).
+		// "echo" is in the service's AllowedCommands, so this succeeds.
+		AllowedCommands: nil,
 	}
 
 	resp, err := w.Execute(context.Background(), req)
 	if err != nil {
-		t.Fatalf("Execute returned error for unrestricted allowlist: %v", err)
+		t.Fatalf("Execute returned error: %v", err)
 	}
 	if resp.ExitCode != 0 {
 		t.Errorf("expected exit code 0; got %d", resp.ExitCode)
@@ -322,7 +333,12 @@ func TestExecuteUnknownService(t *testing.T) {
 // TestExecuteMissingCredential verifies that a service with no stored
 // credential returns an error.
 func TestExecuteMissingCredential(t *testing.T) {
-	svc := services.Service{Name: "nocred", Type: "http_proxy"}
+	svc := services.Service{
+		Name:            "nocred",
+		Type:            "http_proxy",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"echo"}, // required so allowlist passes before cred check
+	}
 	resolver := &fakeResolver{
 		credentials: map[string]string{}, // no credential stored
 		svcs:        map[string]services.Service{"nocred": svc},
@@ -411,7 +427,12 @@ func TestExecuteDefaultTimeout(t *testing.T) {
 // TestExecuteOutputSanitized verifies that sanitization is applied to stdout.
 func TestExecuteOutputSanitized(t *testing.T) {
 	secret := "verysecrettoken9999"
-	svc := services.Service{Name: "github", Type: "http_proxy"}
+	svc := services.Service{
+		Name:            "github",
+		Type:            "http_proxy",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"printenv"},
+	}
 	resolver := &fakeResolver{
 		credentials: map[string]string{"github": secret},
 		svcs:        map[string]services.Service{"github": svc},

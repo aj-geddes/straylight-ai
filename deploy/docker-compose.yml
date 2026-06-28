@@ -29,6 +29,12 @@ services:
     cap_add:
       - SETUID
       - SETGID
+    # v1 exec approval note: straylight_exec uses LoggingAutoApprover which
+    # auto-approves all exec requests that pass the allowlist + ExecEnabled gate.
+    # A WARN-level startup log is emitted when this approver is active.
+    # For environments requiring explicit per-command operator sign-off, replace
+    # LoggingAutoApprover with a blocking Approver implementation (ADR-013 Part A,
+    # Option A5 — human-in-the-loop; tracked for a future release).
 
 volumes:
   straylight-data:

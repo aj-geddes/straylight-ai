@@ -85,10 +85,10 @@ func (m *mockDBExecutor) QueryContext(query string, args ...interface{}) (databa
 
 // mockRows implements database.RowScanner.
 type mockRows struct {
-	cols    []string
-	data    [][]interface{}
-	pos     int
-	closed  bool
+	cols   []string
+	data   [][]interface{}
+	pos    int
+	closed bool
 }
 
 func (r *mockRows) Columns() ([]string, error) {
@@ -139,14 +139,14 @@ func TestDatabaseConfig_Validation(t *testing.T) {
 		{
 			name: "valid postgres config",
 			cfg: database.DatabaseConfig{
-				Engine:         "postgresql",
-				Host:           "db.example.com",
-				Port:           5432,
-				AdminUser:      "admin",
-				AdminPassword:  "secret",
-				Database:       "mydb",
-				DefaultTTL:     "15m",
-				MaxTTL:         "1h",
+				Engine:        "postgresql",
+				Host:          "db.example.com",
+				Port:          5432,
+				AdminUser:     "admin",
+				AdminPassword: "secret",
+				Database:      "mydb",
+				DefaultTTL:    "15m",
+				MaxTTL:        "1h",
 			},
 			wantErr: false,
 		},
@@ -389,6 +389,42 @@ func TestBuildConnectionString_DefaultPort(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Test: Result sanitization — credentials must not appear in output
 // ---------------------------------------------------------------------------
+
+// TestBuildConnectionString_PostgresDefaultSSLMode verifies that an unset SSLMode
+// defaults to require for transport encryption.
+// Operators must set SSLMode=disable explicitly for local dev environments.
+func TestBuildConnectionString_PostgresDefaultSSLMode(t *testing.T) {
+	cfg := database.DatabaseConfig{
+		Engine:   "postgresql",
+		Host:     "db.example.com",
+		Port:     5432,
+		Database: "mydb",
+		// SSLMode intentionally omitted -- should default to require
+	}
+	connStr := database.BuildConnectionString(cfg, "u", "p")
+	if !containsStr(connStr, "sslmode=require") {
+		t.Errorf("expected sslmode=require in connection string when SSLMode is unset; got: %q", connStr)
+	}
+	if containsStr(connStr, "sslmode=disable") {
+		t.Errorf("sslmode must not default to disable; got: %q", connStr)
+	}
+}
+
+// TestBuildConnectionString_PostgresExplicitDisable verifies that operators can
+// set sslmode=disable explicitly (e.g., for local dev environments).
+func TestBuildConnectionString_PostgresExplicitDisable(t *testing.T) {
+	cfg := database.DatabaseConfig{
+		Engine:   "postgresql",
+		Host:     "localhost",
+		Port:     5432,
+		Database: "devdb",
+		SSLMode:  "disable", // explicitly set for local dev
+	}
+	connStr := database.BuildConnectionString(cfg, "u", "p")
+	if !containsStr(connStr, "sslmode=disable") {
+		t.Errorf("expected sslmode=disable when explicitly set; got: %q", connStr)
+	}
+}
 
 func TestSanitizeRows_NoCredentials(t *testing.T) {
 	sensitiveValues := []string{"super-secret-password", "v-user-token123"}

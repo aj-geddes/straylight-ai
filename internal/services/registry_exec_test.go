@@ -93,3 +93,109 @@ func TestValidateServiceExecEnabledWithAllowedCommandsAccepted(t *testing.T) {
 		t.Errorf("unexpected error for valid exec-enabled service: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ExecEnvVar validation tests
+// ---------------------------------------------------------------------------
+
+// TestValidateServiceExecEnvVar_RequiredForNonCloudExecEnabled verifies that
+// a non-cloud service with ExecEnabled=true must have a non-empty ExecEnvVar.
+func TestValidateServiceExecEnvVar_RequiredForNonCloudExecEnabled(t *testing.T) {
+	vault := newMockVault()
+	reg := services.NewRegistry(vault)
+
+	svc := services.Service{
+		Name:            "github-deploy",
+		Type:            "http_proxy",
+		Target:          "https://api.github.com",
+		Inject:          "header",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"git"},
+		// ExecEnvVar intentionally absent -- must be rejected
+	}
+
+	err := reg.Create(svc, "cred")
+	if err == nil {
+		t.Fatal("expected error when ExecEnabled=true but ExecEnvVar is empty for non-cloud service")
+	}
+	if !strings.Contains(err.Error(), "exec_env_var") {
+		t.Errorf("expected error to mention exec_env_var; got: %q", err.Error())
+	}
+}
+
+// TestValidateServiceExecEnvVar_CloudServiceNotRequired verifies that cloud
+// services (which use multi-var EnvVars) do not require ExecEnvVar.
+func TestValidateServiceExecEnvVar_CloudServiceNotRequired(t *testing.T) {
+	vault := newMockVault()
+	reg := services.NewRegistry(vault)
+
+	svc := services.Service{
+		Name:            "aws-deploy",
+		Type:            "cloud",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"aws"},
+		// ExecEnvVar omitted for cloud service -- allowed
+	}
+
+	err := reg.Create(svc, "cred")
+	if err != nil {
+		t.Errorf("unexpected error for cloud service without ExecEnvVar: %v", err)
+	}
+}
+
+// TestValidateServiceExecEnvVar_WithEnvVarAccepted verifies that a non-cloud
+// exec-enabled service with ExecEnvVar set is accepted.
+func TestValidateServiceExecEnvVar_WithEnvVarAccepted(t *testing.T) {
+	vault := newMockVault()
+	reg := services.NewRegistry(vault)
+
+	svc := services.Service{
+		Name:            "github-deploy",
+		Type:            "http_proxy",
+		Target:          "https://api.github.com",
+		Inject:          "header",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"git", "gh"},
+		ExecEnvVar:      "GH_TOKEN",
+	}
+
+	err := reg.Create(svc, "cred")
+	if err != nil {
+		t.Errorf("unexpected error for valid exec-enabled service with ExecEnvVar: %v", err)
+	}
+}
+
+// TestValidateServiceExecEnvVar_PersistsToVaultAndLoads verifies that ExecEnvVar
+// is stored in vault metadata and reloaded into the registry on LoadFromVault.
+func TestValidateServiceExecEnvVar_PersistsToVaultAndLoads(t *testing.T) {
+	vault := newMockVault()
+	reg := services.NewRegistry(vault)
+
+	svc := services.Service{
+		Name:            "github-exec",
+		Type:            "http_proxy",
+		Target:          "https://api.github.com",
+		Inject:          "header",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"gh"},
+		ExecEnvVar:      "GH_TOKEN",
+	}
+
+	if err := reg.Create(svc, "cred"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Create a new registry backed by the same vault and reload.
+	reg2 := services.NewRegistry(vault)
+	if err := reg2.LoadFromVault(); err != nil {
+		t.Fatalf("LoadFromVault: %v", err)
+	}
+
+	loaded, err := reg2.Get("github-exec")
+	if err != nil {
+		t.Fatalf("Get after reload: %v", err)
+	}
+	if loaded.ExecEnvVar != "GH_TOKEN" {
+		t.Errorf("ExecEnvVar after reload = %q, want %q", loaded.ExecEnvVar, "GH_TOKEN")
+	}
+}

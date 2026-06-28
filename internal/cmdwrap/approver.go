@@ -27,8 +27,15 @@ type LoggingAutoApprover struct {
 // NewAutoApprover creates a LoggingAutoApprover that logs every exec approval
 // decision at INFO level and auto-approves. Use it as the production default
 // for deployments that do not yet have a blocking approval mechanism.
+//
+// WARNING (v1 limitation): This approver auto-approves every exec request.
+// All commands that pass the allowlist and ExecEnabled gate are executed
+// without a human approval step. Replace with a blocking Approver implementation
+// for environments requiring explicit per-command operator sign-off.
 func NewAutoApprover() *LoggingAutoApprover {
-	return NewAutoApproverWithLogger(slog.Default())
+	a := NewAutoApproverWithLogger(slog.Default())
+	slog.Warn("straylight_exec: LoggingAutoApprover active — exec requests are auto-approved; replace with a blocking Approver for human-in-the-loop enforcement (v1 limitation)")
+	return a
 }
 
 // NewAutoApproverWithLogger creates a LoggingAutoApprover with a custom logger.

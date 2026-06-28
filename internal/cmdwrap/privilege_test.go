@@ -105,8 +105,14 @@ func TestBuildSysProcAttrForTest(t *testing.T) {
 			if attr.Credential.Gid != tt.gid {
 				t.Errorf("Credential.Gid = %d, want %d", attr.Credential.Gid, tt.gid)
 			}
-			if !attr.Credential.NoSetGroups {
-				t.Error("Credential.NoSetGroups must be true to suppress setgroups(2) call")
+			if attr.Credential.NoSetGroups {
+				t.Error("Credential.NoSetGroups must be false to enable setgroups(0) clearing supplementary groups")
+			}
+			if attr.Credential.Groups == nil {
+				t.Error("Credential.Groups must be an explicit empty slice (not nil) to clear supplementary groups via setgroups(0)")
+			}
+			if len(attr.Credential.Groups) != 0 {
+				t.Errorf("Credential.Groups must be empty; got %v", attr.Credential.Groups)
 			}
 			// Compile-time assertion that the return type is actually *syscall.SysProcAttr.
 			var _ *syscall.SysProcAttr = attr

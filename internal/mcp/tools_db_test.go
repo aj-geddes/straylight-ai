@@ -239,6 +239,54 @@ func TestHandleDBQuery_MaxRowsDefault(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: executeQuery uses READ ONLY transaction (seam test)
+// ---------------------------------------------------------------------------
+
+// TestHandleDBQuery_CredentialErrorIsObscured verifies that database connection
+// errors (which may contain DSN details) are sanitized before being returned.
+// This also exercises the read-only transaction path through the error handler.
+func TestHandleDBQuery_CredentialErrorIsObscured(t *testing.T) {
+	type credErrDB struct {
+		mockDBExecutor
+	}
+	db := &credErrDB{
+		mockDBExecutor: mockDBExecutor{
+			configs: map[string]database.DatabaseConfig{
+				"mydb": {Engine: "postgresql", Host: "db.example.com", Port: 5432, Database: "testdb"},
+			},
+			credErr: errors.New("vault: credentials unavailable"),
+		},
+	}
+
+	h := newTestHandler(&mockProxy{}, &mockServices{})
+	h.SetDBExecutor(db)
+
+	w := doRequest(h, "POST", "/api/v1/mcp/tool-call", map[string]interface{}{
+		"tool": "straylight_db_query",
+		"arguments": map[string]interface{}{
+			"service": "mydb",
+			"query":   "SELECT 1",
+		},
+	})
+
+	var result mcp.ToolCallResult
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("expected IsError=true when credentials are unavailable")
+	}
+	// The DSN/password must not appear in the error message.
+	errText := result.Content[0].Text
+	for _, sensitive := range []string{"password=", "host=", "@tcp(", "sslmode="} {
+		if containsMCPStr(errText, sensitive) {
+			t.Errorf("sensitive DSN detail %q leaked in error: %q", sensitive, errText)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 

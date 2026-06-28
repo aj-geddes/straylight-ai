@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -249,18 +250,25 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 		envPairs = pairs
 	} else {
 		// Single-var path: validate env_var and resolve credential.
-		if !envVarPattern.MatchString(req.EnvVar) {
-			return nil, fmt.Errorf("cmdwrap: env_var %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", req.EnvVar)
+		// Populate from svc.ExecEnvVar when the request omits the field.
+		// This allows the service configuration to supply the env var name so
+		// handleExec does not need to know it (ADR-013 security seam fix).
+		envVar := req.EnvVar
+		if envVar == "" && svc.ExecEnvVar != "" {
+			envVar = svc.ExecEnvVar
 		}
-		if reservedEnvVars[req.EnvVar] {
-			return nil, fmt.Errorf("cmdwrap: env_var %q is a reserved system variable", req.EnvVar)
+		if !envVarPattern.MatchString(envVar) {
+			return nil, fmt.Errorf("cmdwrap: env_var %q is invalid: must match ^[A-Z][A-Z0-9_]{0,63}$", envVar)
+		}
+		if reservedEnvVars[envVar] {
+			return nil, fmt.Errorf("cmdwrap: env_var %q is a reserved system variable", envVar)
 		}
 
 		credential, err := w.resolver.GetCredential(req.Service)
 		if err != nil {
 			return nil, fmt.Errorf("cmdwrap: %w", err)
 		}
-		envPairs = buildEnv(req.EnvVar, credential)
+		envPairs = buildEnv(envVar, credential)
 	}
 
 	// Parse the command string into argv.
@@ -269,8 +277,21 @@ func (w *Wrapper) Execute(ctx context.Context, req ExecRequest) (*ExecResponse, 
 		return nil, fmt.Errorf("cmdwrap: %w", err)
 	}
 
-	// Enforce command allowlist.
-	if err := checkAllowlist(argv[0], req.Service, req.AllowedCommands); err != nil {
+	// Path-normalize argv[0] before allowlist check so that "aws", "./aws", and
+	// "/usr/bin/aws" all match an allowlist entry of "aws" (Finding 3 fix).
+	// exec.LookPath resolves the binary path; filepath.Base extracts the name.
+	// On failure (binary not found) we use argv[0] as-is — the command will
+	// fail at exec time with a clear "not found" error.
+	resolvedBin, lookErr := exec.LookPath(argv[0])
+	if lookErr != nil {
+		resolvedBin = argv[0]
+	}
+	normalizedBin := filepath.Base(resolvedBin)
+
+	// Enforce command allowlist using svc.AllowedCommands (not req.AllowedCommands).
+	// The allowlist is the service-level control — callers must not be able to
+	// bypass it by omitting or clearing req.AllowedCommands (Finding 1 fix).
+	if err := checkAllowlist(normalizedBin, req.Service, svc.AllowedCommands); err != nil {
 		return nil, err
 	}
 
@@ -427,11 +448,14 @@ func splitCommand(command string) ([]string, error) {
 	return tokens, nil
 }
 
-// checkAllowlist returns an error if the binary name is not in allowed, or nil
-// if allowed is empty (meaning all commands are permitted).
+// checkAllowlist returns nil when binary is in the allowed list.
+// Fails closed when allowed is empty: an exec-enabled service must have a
+// non-empty allowlist — empty means "deny all" (ADR-013 Finding 1 fix).
+// The old allow-all-when-empty behavior applied to req.AllowedCommands which is
+// now unused; svc.AllowedCommands must always be validated explicitly.
 func checkAllowlist(binary, service string, allowed []string) error {
 	if len(allowed) == 0 {
-		return nil
+		return fmt.Errorf("cmdwrap: no allowed commands configured for service %q (exec requires a non-empty allowlist)", service)
 	}
 	for _, a := range allowed {
 		if binary == a {

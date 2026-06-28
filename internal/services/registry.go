@@ -69,6 +69,12 @@ type Service struct {
 	// ignored otherwise. An empty allowlist with ExecEnabled=true is rejected
 	// at validation time (deny-all-by-default; ADR-013 Part A, Option A4).
 	AllowedCommands []string `json:"allowed_commands,omitempty" yaml:"allowed_commands,omitempty"`
+	// ExecEnvVar is the environment variable name into which the credential is
+	// injected for single-credential services (e.g. "GH_TOKEN"). Required and
+	// non-empty when ExecEnabled is true and the service does not use multi-var
+	// EnvVars. Cloud services that supply multi-var credentials via the EnvVars
+	// map are unaffected. Persisted in vault metadata alongside allowed_commands.
+	ExecEnvVar string `json:"exec_env_var,omitempty" yaml:"exec_env_var,omitempty"`
 	// Egress is the per-service outbound allowlist applied by the egress guard.
 	// When nil, only the built-in SSRF denylist applies (public destinations
 	// allowed, metadata/private/link-local denied).
@@ -558,6 +564,9 @@ func (r *Registry) saveMetadata(svc Service) error {
 			data["allowed_commands"] = string(acJSON)
 		}
 	}
+	if svc.ExecEnvVar != "" {
+		data["exec_env_var"] = svc.ExecEnvVar
+	}
 	return r.vault.WriteSecret(metadataPath(svc.Name), data)
 }
 
@@ -625,6 +634,9 @@ func (r *Registry) LoadFromVault() error {
 				svc.AllowedCommands = cmds
 			}
 		}
+		if ev := getString(data, "exec_env_var"); ev != "" {
+			svc.ExecEnvVar = ev
+		}
 
 		r.mu.Lock()
 		if _, exists := r.services[name]; !exists {
@@ -659,6 +671,14 @@ func validateService(svc Service) error {
 	// the per-service scope restriction (second layer after the uid-drop).
 	if svc.ExecEnabled && len(svc.AllowedCommands) == 0 {
 		return fmt.Errorf("services: exec_enabled requires a non-empty allowed_commands list for service %q", svc.Name)
+	}
+
+	// ADR-013 Part C.2: when exec_enabled is true, exec_env_var is mandatory for
+	// non-cloud services so the wrapper knows which env var carries the credential.
+	// Cloud services use the multi-var EnvVars path (injected at exec time) and
+	// do not require a single exec_env_var.
+	if svc.ExecEnabled && svc.Type != "cloud" && svc.ExecEnvVar == "" {
+		return fmt.Errorf("services: exec_enabled requires exec_env_var for non-cloud service %q", svc.Name)
 	}
 
 	// Database and cloud services do not use a target URL — skip URL validation.

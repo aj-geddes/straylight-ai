@@ -14,9 +14,12 @@ import (
 // The service has no single credential value — it relies on EnvVars injection.
 // It configures child credential and auto-approver for ADR-013 fail-closed gates.
 func newCloudTestWrapper() *cmdwrap.Wrapper {
+	// AllowedCommands is required at the wrapper level for exec-enabled services.
 	svc := services.Service{
-		Name: "aws-prod",
-		Type: "cloud",
+		Name:            "aws-prod",
+		Type:            "cloud",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"printenv", "echo"},
 	}
 	resolver := &fakeResolver{
 		credentials: map[string]string{},
@@ -59,7 +62,12 @@ func TestExecuteEnvVarsMultipleInjected(t *testing.T) {
 // and EnvVars are set, EnvVars takes precedence.
 func TestExecuteEnvVarsTakesPrecedenceOverEnvVar(t *testing.T) {
 	// Use a service with a real credential to test the precedence.
-	svc := services.Service{Name: "github", Type: "http_proxy"}
+	svc := services.Service{
+		Name:            "github",
+		Type:            "http_proxy",
+		ExecEnabled:     true,
+		AllowedCommands: []string{"printenv", "echo"},
+	}
 	resolver := &fakeResolver{
 		credentials: map[string]string{"github": "legacy-token-value"},
 		svcs:        map[string]services.Service{"github": svc},
