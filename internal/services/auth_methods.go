@@ -77,6 +77,10 @@ var validInjectionTypes = map[InjectionType]bool{
 	InjectionBasicAuth:     true,
 	InjectionOAuth:         true,
 	InjectionNamedStrategy: true,
+	// Wave 2 injection types.
+	InjectionCustomAuth:    true,
+	InjectionAWSSigV4:      true,
+	InjectionHMACSignature: true,
 }
 
 // InjectionType enumerates the supported credential injection strategies.
@@ -90,6 +94,10 @@ const (
 	InjectionBasicAuth     InjectionType = "basic_auth"
 	InjectionOAuth         InjectionType = "oauth"
 	InjectionNamedStrategy InjectionType = "named_strategy"
+	// Wave 2 injection types.
+	InjectionCustomAuth    InjectionType = "custom_auth"
+	InjectionAWSSigV4      InjectionType = "aws_sigv4"
+	InjectionHMACSignature InjectionType = "hmac_signature"
 )
 
 // FieldType enumerates the UI input types for credential fields.
@@ -135,6 +143,61 @@ type InjectionConfig struct {
 	QueryParam     string            `json:"query_param,omitempty"     yaml:"query_param,omitempty"`
 	Headers        map[string]string `json:"headers,omitempty"         yaml:"headers,omitempty"`
 	Strategy       string            `json:"strategy,omitempty"        yaml:"strategy,omitempty"`
+	// Wave 2: data-driven custom_auth spec. Nil for all existing configs.
+	Custom *CustomAuthSpec `json:"custom,omitempty"          yaml:"custom,omitempty"`
+	// Wave 2: signer-family parameters for aws_sigv4 and hmac_signature.
+	Sign *SignSpec `json:"sign,omitempty"            yaml:"sign,omitempty"`
+}
+
+// CustomAuthSpec is the data-driven placement spec for the custom_auth injector.
+// Each value is a Go text/template string rendered against the credential fields map.
+// Keys are literal header/param/body-key names.
+type CustomAuthSpec struct {
+	// Headers maps header name -> template (e.g. "X-Api-Key" -> "{{.api_key}}").
+	Headers map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
+	// Query maps query param name -> template (e.g. "token" -> "{{.token}}").
+	Query map[string]string `json:"query,omitempty" yaml:"query,omitempty"`
+	// Body maps body key -> template. Keys are field names or JSON keys.
+	Body map[string]string `json:"body,omitempty" yaml:"body,omitempty"`
+	// BodyMode is "json" (merge into a JSON object body) or "form"
+	// (application/x-www-form-urlencoded). Empty => body injection disabled.
+	BodyMode string `json:"body_mode,omitempty" yaml:"body_mode,omitempty"`
+}
+
+// AWSSignSpec holds AWS SigV4 signing parameters.
+type AWSSignSpec struct {
+	// Region is the AWS region (e.g. "us-east-1"). May be overridden by credential field "region".
+	Region string `json:"region,omitempty" yaml:"region,omitempty"`
+	// Service is the AWS service name (e.g. "s3", "execute-api").
+	Service string `json:"service,omitempty" yaml:"service,omitempty"`
+}
+
+// HMACSpec holds generic HMAC signing parameters.
+type HMACSpec struct {
+	// Algorithm is "sha256" or "sha512".
+	Algorithm string `json:"algorithm,omitempty" yaml:"algorithm,omitempty"`
+	// Encoding is "hex" or "base64".
+	Encoding string `json:"encoding,omitempty" yaml:"encoding,omitempty"`
+	// HeaderName is the request header to set with the signature.
+	HeaderName string `json:"header_name,omitempty" yaml:"header_name,omitempty"`
+	// HeaderPrefix is prepended to the encoded signature (e.g. "sha256=").
+	HeaderPrefix string `json:"header_prefix,omitempty" yaml:"header_prefix,omitempty"`
+	// SecretField is the credential field name holding the HMAC key.
+	SecretField string `json:"secret_field,omitempty" yaml:"secret_field,omitempty"`
+	// SignedString is a template rendered against {timestamp, method, path, body, ...fields}.
+	SignedString string `json:"signed_string,omitempty" yaml:"signed_string,omitempty"`
+	// IncludeTimestamp adds a timestamp (unix seconds) header and exposes {{.timestamp}}.
+	IncludeTimestamp bool `json:"include_timestamp,omitempty" yaml:"include_timestamp,omitempty"`
+	// TimestampHeader is the header name for the timestamp value (e.g. "X-Timestamp").
+	TimestampHeader string `json:"timestamp_header,omitempty" yaml:"timestamp_header,omitempty"`
+}
+
+// SignSpec nests signer-family parameters in InjectionConfig.
+type SignSpec struct {
+	// AWS holds SigV4 parameters for aws_sigv4.
+	AWS *AWSSignSpec `json:"aws,omitempty" yaml:"aws,omitempty"`
+	// HMAC holds HMAC parameters for hmac_signature.
+	HMAC *HMACSpec `json:"hmac,omitempty" yaml:"hmac,omitempty"`
 }
 
 // ServiceTemplate is a pre-configured template for a common service.
@@ -209,6 +272,40 @@ func ValidateAuthMethod(am AuthMethod) error {
 	case InjectionOAuth:
 		if len(am.Fields) != 0 {
 			return fmt.Errorf("auth method %q: oauth injection must have empty fields slice", am.ID)
+		}
+	case InjectionCustomAuth:
+		if am.Injection.Custom == nil {
+			return fmt.Errorf("auth method %q: custom_auth injection requires a non-nil Custom spec", am.ID)
+		}
+		if len(am.Injection.Custom.Headers) == 0 && len(am.Injection.Custom.Query) == 0 && len(am.Injection.Custom.Body) == 0 {
+			return fmt.Errorf("auth method %q: custom_auth Custom spec must have at least one of headers, query, or body", am.ID)
+		}
+		if am.Injection.Custom.BodyMode != "" && am.Injection.Custom.BodyMode != "json" && am.Injection.Custom.BodyMode != "form" {
+			return fmt.Errorf("auth method %q: custom_auth body_mode must be 'json' or 'form', got %q", am.ID, am.Injection.Custom.BodyMode)
+		}
+	case InjectionAWSSigV4:
+		if am.Injection.Sign == nil || am.Injection.Sign.AWS == nil {
+			return fmt.Errorf("auth method %q: aws_sigv4 injection requires Sign.AWS config", am.ID)
+		}
+		if am.Injection.Sign.AWS.Service == "" {
+			return fmt.Errorf("auth method %q: aws_sigv4 Sign.AWS.Service is required", am.ID)
+		}
+	case InjectionHMACSignature:
+		if am.Injection.Sign == nil || am.Injection.Sign.HMAC == nil {
+			return fmt.Errorf("auth method %q: hmac_signature injection requires Sign.HMAC config", am.ID)
+		}
+		h := am.Injection.Sign.HMAC
+		if h.Algorithm == "" {
+			return fmt.Errorf("auth method %q: hmac_signature Sign.HMAC.Algorithm is required", am.ID)
+		}
+		if h.HeaderName == "" {
+			return fmt.Errorf("auth method %q: hmac_signature Sign.HMAC.HeaderName is required", am.ID)
+		}
+		if h.SecretField == "" {
+			return fmt.Errorf("auth method %q: hmac_signature Sign.HMAC.SecretField is required", am.ID)
+		}
+		if h.SignedString == "" {
+			return fmt.Errorf("auth method %q: hmac_signature Sign.HMAC.SignedString is required", am.ID)
 		}
 	}
 
