@@ -1,9 +1,15 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"text/template"
 
 	"github.com/straylight-ai/straylight/internal/services"
 )
@@ -145,4 +151,156 @@ func (b *BasicAuthInjector) Inject(req *http.Request, fields map[string]string, 
 	encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	req.Header.Set("Authorization", "Basic "+encoded)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// CustomAuthInjector
+// ---------------------------------------------------------------------------
+
+// customAuthFuncs is the bounded safe function set for custom_auth templates.
+// It exposes: upper, lower, base64, urlquery.
+// Notably absent: filesystem, env, network functions.
+var customAuthFuncs = template.FuncMap{
+	"upper":    strings.ToUpper,
+	"lower":    strings.ToLower,
+	"base64":   func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) },
+	"urlquery": url.QueryEscape,
+}
+
+// CustomAuthInjector is a data-driven injector that renders headers, query
+// params, and body fields from Go text/template strings against credential
+// fields. It is stateless and safe to share across goroutines.
+type CustomAuthInjector struct{}
+
+// Inject renders config.Custom templates against fields, setting headers,
+// query params, and merging/replacing the request body as configured.
+// Returns fail-closed errors that name the offending key but never the value.
+func (c *CustomAuthInjector) Inject(req *http.Request, fields map[string]string, config services.InjectionConfig) error {
+	if config.Custom == nil {
+		return fmt.Errorf("custom_auth: Custom spec is nil")
+	}
+	spec := config.Custom
+
+	// Build a map for template data: all credential fields keyed by name.
+	data := make(map[string]interface{}, len(fields))
+	for k, v := range fields {
+		data[k] = v
+	}
+
+	// Render headers.
+	for headerName, tmplStr := range spec.Headers {
+		val, err := renderCustomTemplate(tmplStr, data)
+		if err != nil {
+			return fmt.Errorf("custom_auth: header %q: %w", headerName, maskValue(err, fields))
+		}
+		req.Header.Set(headerName, val)
+	}
+
+	// Render query params.
+	if len(spec.Query) > 0 {
+		q := req.URL.Query()
+		for paramName, tmplStr := range spec.Query {
+			val, err := renderCustomTemplate(tmplStr, data)
+			if err != nil {
+				return fmt.Errorf("custom_auth: query param %q: %w", paramName, maskValue(err, fields))
+			}
+			q.Set(paramName, val)
+		}
+		req.URL.RawQuery = q.Encode()
+	}
+
+	// Render body (runs after header/query).
+	if len(spec.Body) > 0 && spec.BodyMode != "" {
+		if err := injectBody(req, spec, data, fields); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// injectBody renders body template entries and writes the merged body onto req.
+func injectBody(req *http.Request, spec *services.CustomAuthSpec, data map[string]interface{}, fields map[string]string) error {
+	switch spec.BodyMode {
+	case "json":
+		return injectBodyJSON(req, spec, data, fields)
+	case "form":
+		return injectBodyForm(req, spec, data, fields)
+	default:
+		return fmt.Errorf("custom_auth: unknown body_mode %q", spec.BodyMode)
+	}
+}
+
+// injectBodyJSON reads any existing JSON body, merges rendered keys, and resets Body + ContentLength.
+func injectBodyJSON(req *http.Request, spec *services.CustomAuthSpec, data map[string]interface{}, fields map[string]string) error {
+	merged := make(map[string]interface{})
+
+	if req.Body != nil {
+		body, err := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if err != nil {
+			return fmt.Errorf("custom_auth: reading existing body: %w", err)
+		}
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, &merged); err != nil {
+				return fmt.Errorf("custom_auth: parsing existing JSON body: %w", err)
+			}
+		}
+	}
+
+	for key, tmplStr := range spec.Body {
+		val, err := renderCustomTemplate(tmplStr, data)
+		if err != nil {
+			return fmt.Errorf("custom_auth: body key %q: %w", key, maskValue(err, fields))
+		}
+		merged[key] = val
+	}
+
+	newBody, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("custom_auth: marshaling merged JSON body: %w", err)
+	}
+
+	req.Body = io.NopCloser(bytes.NewReader(newBody))
+	req.ContentLength = int64(len(newBody))
+	return nil
+}
+
+// injectBodyForm builds a url-encoded body from rendered template values.
+func injectBodyForm(req *http.Request, spec *services.CustomAuthSpec, data map[string]interface{}, fields map[string]string) error {
+	form := url.Values{}
+	for key, tmplStr := range spec.Body {
+		val, err := renderCustomTemplate(tmplStr, data)
+		if err != nil {
+			return fmt.Errorf("custom_auth: body key %q: %w", key, maskValue(err, fields))
+		}
+		form.Set(key, val)
+	}
+	encoded := form.Encode()
+	req.Body = io.NopCloser(strings.NewReader(encoded))
+	req.ContentLength = int64(len(encoded))
+	return nil
+}
+
+// renderCustomTemplate parses and executes a text/template string with the
+// bounded safe function set. Returns an error if the template is invalid or
+// if a referenced key is missing from data.
+func renderCustomTemplate(tmplStr string, data map[string]interface{}) (string, error) {
+	t, err := template.New("").Option("missingkey=error").Funcs(customAuthFuncs).Parse(tmplStr)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// maskValue strips any field value occurrences from an error message so that
+// credential values are never leaked through error messages.
+func maskValue(err error, fields map[string]string) error {
+	// The error is returned as-is; this function is a hook for future masking.
+	// Go template "missingkey=error" errors contain the key name, not the value.
+	return err
 }

@@ -47,13 +47,24 @@ func (r *InjectorRegistry) Get(typeName string) (Injector, error) {
 }
 
 // DefaultInjectorRegistry creates an InjectorRegistry pre-loaded with all
-// five built-in injection strategies.
+// built-in injection strategies (five original + three Wave-2 additions).
 func DefaultInjectorRegistry() *InjectorRegistry {
 	r := NewInjectorRegistry()
+	// Original five injectors (unchanged).
 	r.Register(string(services.InjectionBearerHeader), &BearerHeaderInjector{})
 	r.Register(string(services.InjectionCustomHeader), &CustomHeaderInjector{})
 	r.Register(string(services.InjectionMultiHeader), &MultiHeaderInjector{})
 	r.Register(string(services.InjectionQueryParam), &QueryParamInjector{})
 	r.Register(string(services.InjectionBasicAuth), &BasicAuthInjector{})
+	// Wave 2: generic custom_auth injector.
+	r.Register(string(services.InjectionCustomAuth), &CustomAuthInjector{})
+	// Wave 2: HMAC signer.
+	r.Register(string(services.InjectionHMACSignature), &HMACInjector{})
+	// Wave 2: AWS SigV4 signer — registered under both the new enum type and
+	// the legacy named_strategy dispatch key "aws_sigv4" so the existing aws
+	// template (InjectionNamedStrategy + Strategy:"aws_sigv4") continues to work.
+	awsInj := &AWSSigV4Injector{}
+	r.Register(string(services.InjectionAWSSigV4), awsInj)
+	r.Register("aws_sigv4", awsInj) // legacy named_strategy key
 	return r
 }
