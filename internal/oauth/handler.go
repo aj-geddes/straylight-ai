@@ -6,6 +6,7 @@ package oauth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/straylight-ai/straylight/internal/services"
+	"github.com/straylight-ai/straylight/internal/tokenexchange"
 )
 
 // serviceNamePattern matches valid service names: starts with a lowercase letter,
@@ -56,6 +58,10 @@ type Handler struct {
 	stateManager *StateManager
 	logger       *slog.Logger
 	httpClient   *http.Client
+	// guard serializes concurrent RefreshToken calls for the same service via
+	// single-flight, protecting single-use (Slack) and rotating (Atlassian)
+	// refresh tokens from race corruption. nil = no guard (backward compat).
+	guard *tokenexchange.RefreshGuard
 }
 
 // NewHandler constructs an oauth Handler.
@@ -71,6 +77,18 @@ func NewHandler(vault VaultClient, svcUpdater ServiceUpdater, baseURL string) *H
 		logger:       slog.Default(),
 		httpClient:   &http.Client{Timeout: 15 * time.Second},
 	}
+}
+
+// NewHandlerWithGuard constructs an oauth Handler with a RefreshGuard.
+//
+// The guard serializes concurrent RefreshToken calls for the same service via
+// single-flight, so that rotating/single-use refresh tokens (Slack, Atlassian)
+// are not corrupted when multiple AI tool calls race to refresh. The new token
+// is written back to OpenBao atomically before releasing waiters.
+func NewHandlerWithGuard(vault VaultClient, svcUpdater ServiceUpdater, baseURL string, guard *tokenexchange.RefreshGuard) *Handler {
+	h := NewHandler(vault, svcUpdater, baseURL)
+	h.guard = guard
+	return h
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +265,39 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 // Returns the new access token or an error.
 // On refresh failure it returns an error; callers are responsible for updating
 // service status to "expired" when appropriate.
+//
+// When a RefreshGuard is configured (via NewHandlerWithGuard), concurrent calls
+// for the same serviceName are single-flighted: at most one upstream refresh
+// runs at a time; all waiters receive the same result. This protects single-use
+// refresh tokens (Slack) and rotating refresh tokens (Atlassian) from race
+// corruption. The new tokens are written to OpenBao atomically before waiters
+// are released.
 func (h *Handler) RefreshToken(serviceName string) (string, error) {
+	if h.guard != nil {
+		return h.refreshTokenGuarded(serviceName)
+	}
+	return h.doRefreshToken(serviceName)
+}
+
+// refreshTokenGuarded wraps doRefreshToken with the per-key single-flight
+// guard so concurrent refreshes for the same service are collapsed.
+func (h *Handler) refreshTokenGuarded(serviceName string) (string, error) {
+	result, err := h.guard.Do(context.Background(), serviceName, func(_ context.Context) (map[string]string, error) {
+		tok, err := h.doRefreshToken(serviceName)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"access_token": tok}, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return result["access_token"], nil
+}
+
+// doRefreshToken performs the actual token refresh: read from vault, call
+// provider endpoint, write updated tokens back. No concurrency protection.
+func (h *Handler) doRefreshToken(serviceName string) (string, error) {
 	data, err := h.vault.ReadSecret(oauthTokenPath(serviceName))
 	if err != nil {
 		return "", fmt.Errorf("oauth: read tokens for %q: %w", serviceName, err)

@@ -228,7 +228,12 @@ func newServeCmd() *cobra.Command {
 			mcpHandler.SetCommandExecutor(execWrapper)
 
 			baseURL := fmt.Sprintf("http://localhost:%d", port)
-			oauthHandler := oauth.NewHandler(vaultClient, registry, baseURL)
+			// ADR-012 Phase 4: wire RefreshGuard into the OAuth handler so concurrent
+			// refreshes for the same service single-flight and the rotated refresh token
+			// is written back to OpenBao atomically, protecting Slack (single-use RT)
+			// and Atlassian (rotating RT) from refresh races.
+			oauthRefreshGuard := tokenexchange.NewRefreshGuard()
+			oauthHandler := oauth.NewHandlerWithGuard(vaultClient, registry, baseURL, oauthRefreshGuard)
 
 			// ADR-012 Phase 1: configure OpenBao as OIDC trust root and build the
 			// public discovery document. The issuer URL is the server's public base URL.
