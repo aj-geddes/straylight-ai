@@ -27,8 +27,10 @@ vi.mock("../health.js", () => ({
 
 vi.mock("../mcp-register.js", () => ({
   registerMCP: vi.fn(),
+  unregisterMCP: vi.fn(),
   isClaudeAvailable: vi.fn(),
   manualRegistrationInstructions: vi.fn().mockReturnValue("Manual instructions"),
+  getTelemetryConsent: vi.fn().mockReturnValue(false),
 }));
 
 // Mock open (browser opening)
@@ -50,13 +52,15 @@ import {
   removeContainer,
 } from "../docker.js";
 import { waitForHealth, checkHealth } from "../health.js";
-import { registerMCP, isClaudeAvailable } from "../mcp-register.js";
+import { registerMCP, unregisterMCP, isClaudeAvailable, getTelemetryConsent } from "../mcp-register.js";
 import { openBrowser } from "../open.js";
 
 import { runSetup } from "../commands/setup.js";
 import { runStart } from "../commands/start.js";
 import { runStop } from "../commands/stop.js";
 import { runStatus } from "../commands/status.js";
+import { runRegister } from "../commands/register.js";
+import { runUnregister } from "../commands/unregister.js";
 
 const mockDetectRuntime = vi.mocked(detectRuntime);
 const mockGetContainerStatus = vi.mocked(getContainerStatus);
@@ -73,6 +77,8 @@ const mockCheckHealth = vi.mocked(checkHealth);
 const mockRegisterMCP = vi.mocked(registerMCP);
 const mockIsClaudeAvailable = vi.mocked(isClaudeAvailable);
 const mockOpenBrowser = vi.mocked(openBrowser);
+const mockGetTelemetryConsent = vi.mocked(getTelemetryConsent);
+const mockUnregisterMCP = vi.mocked(unregisterMCP);
 const mockExecSync = vi.mocked(execSync);
 
 const HEALTH_URL = "http://localhost:9470/api/v1/health";
@@ -89,7 +95,7 @@ beforeEach(() => {
   mockBuildStopCommand.mockReturnValue("docker stop straylight-ai");
   mockWaitForHealth.mockResolvedValue(HEALTH_RESPONSE);
   mockCheckHealth.mockResolvedValue(HEALTH_RESPONSE);
-  mockRegisterMCP.mockResolvedValue(false);
+  mockRegisterMCP.mockResolvedValue({ registered: [], skipped: [], errors: [] });
   mockIsClaudeAvailable.mockReturnValue(false);
   mockOpenBrowser.mockResolvedValue(undefined);
   mockExecSync.mockReturnValue(Buffer.from(""));
@@ -97,6 +103,8 @@ beforeEach(() => {
   mockGetImageId.mockReturnValue("sha256:abc123");
   mockGetContainerImageId.mockReturnValue("sha256:abc123");
   mockRemoveContainer.mockReturnValue(undefined);
+  mockGetTelemetryConsent.mockReturnValue(false);
+  mockUnregisterMCP.mockResolvedValue({ registered: [], skipped: [], errors: [] });
 });
 
 afterEach(() => {
@@ -107,6 +115,18 @@ describe("runSetup", () => {
   it("errors when no container runtime is found", async () => {
     mockDetectRuntime.mockReturnValue(null);
     await expect(runSetup()).rejects.toThrow(/docker|podman/i);
+  });
+
+  it("errors with actionable message when Docker is installed but not running", async () => {
+    // detectRuntime finds docker, but execSync("docker info") fails (daemon not running)
+    mockExecSync.mockImplementation((cmd) => {
+      if (String(cmd).includes("docker info")) {
+        throw new Error("Cannot connect to the Docker daemon");
+      }
+      return Buffer.from("");
+    });
+
+    await expect(runSetup()).rejects.toThrow(/not running|start docker/i);
   });
 
   it("creates and starts container when not found", async () => {
@@ -148,9 +168,9 @@ describe("runSetup", () => {
     expect(mockWaitForHealth).toHaveBeenCalled();
   });
 
-  it("registers MCP when claude is available", async () => {
+  it("registers MCP across all detected CLIs", async () => {
     mockGetContainerStatus.mockResolvedValue("not_found");
-    mockRegisterMCP.mockResolvedValue(true);
+    mockRegisterMCP.mockResolvedValue({ registered: ["Claude Code", "Cursor"], skipped: [], errors: [] });
 
     await runSetup();
 
@@ -180,7 +200,7 @@ describe("runSetup", () => {
     );
     mockBuildStartCommand.mockReturnValue("docker start straylight-ai");
     mockWaitForHealth.mockResolvedValue(HEALTH_RESPONSE);
-    mockRegisterMCP.mockResolvedValue(false);
+    mockRegisterMCP.mockResolvedValue({ registered: [], skipped: [], errors: [] });
     mockOpenBrowser.mockResolvedValue(undefined);
     mockExecSync.mockReturnValue(Buffer.from(""));
 
@@ -284,5 +304,65 @@ describe("runStatus", () => {
     const result = await runStatus();
 
     expect(result.containerStatus).toBe("not_found");
+  });
+});
+
+describe("runRegister", () => {
+  it("calls registerMCP and reports registered CLIs", async () => {
+    mockRegisterMCP.mockResolvedValue({
+      registered: ["Claude Code", "Cursor"],
+      skipped: ["VS Code"],
+      errors: [],
+    });
+
+    await runRegister();
+
+    expect(mockRegisterMCP).toHaveBeenCalledOnce();
+  });
+
+  it("reports skipped CLIs when nothing is installed", async () => {
+    mockRegisterMCP.mockResolvedValue({
+      registered: [],
+      skipped: ["Claude Code", "Cursor", "Windsurf", "VS Code", "Codex", "Gemini CLI"],
+      errors: [],
+    });
+
+    // Should not throw
+    await expect(runRegister()).resolves.toBeUndefined();
+  });
+
+  it("reports errors without throwing", async () => {
+    mockRegisterMCP.mockResolvedValue({
+      registered: [],
+      skipped: [],
+      errors: ["Claude Code: mcp add failed"],
+    });
+
+    await expect(runRegister()).resolves.toBeUndefined();
+    expect(mockRegisterMCP).toHaveBeenCalledOnce();
+  });
+});
+
+describe("runUnregister", () => {
+  it("calls unregisterMCP and reports unregistered CLIs", async () => {
+    mockUnregisterMCP.mockResolvedValue({
+      registered: ["Claude Code", "Cursor"],
+      skipped: [],
+      errors: [],
+    });
+
+    await runUnregister();
+
+    expect(mockUnregisterMCP).toHaveBeenCalledOnce();
+  });
+
+  it("reports skipped CLIs when nothing is installed", async () => {
+    mockUnregisterMCP.mockResolvedValue({
+      registered: [],
+      skipped: ["Claude Code", "Cursor", "Windsurf", "VS Code", "Codex", "Gemini CLI"],
+      errors: [],
+    });
+
+    await expect(runUnregister()).resolves.toBeUndefined();
   });
 });
