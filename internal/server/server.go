@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"github.com/straylight-ai/straylight/internal/cloud"
 	"github.com/straylight-ai/straylight/internal/database"
 	"github.com/straylight-ai/straylight/internal/egress"
+	"github.com/straylight-ai/straylight/internal/mcpauth"
+	"github.com/straylight-ai/straylight/internal/mcphttp"
 	"github.com/straylight-ai/straylight/internal/oauth"
 	"github.com/straylight-ai/straylight/internal/oidc"
 	"github.com/straylight-ai/straylight/internal/services"
@@ -89,6 +92,33 @@ type Config struct {
 	// handlers fall back to services.ServiceTemplates. Prefer setting this via
 	// LoadCommunityTemplates + MergeTemplates at startup.
 	Templates []services.ServiceTemplate
+
+	// ---------------------------------------------------------------------------
+	// Remote MCP (ADR-015, Wave 3). All nil/zero = remote mode OFF.
+	// The existing stdio path and /api/v1/mcp/* are UNCHANGED when unset.
+	// ---------------------------------------------------------------------------
+
+	// RemoteListenAddress is the listen address for the opt-in remote MCP listener
+	// (e.g. "127.0.0.1:9471"). Empty string = remote mode OFF. Default is loopback;
+	// never auto-binds 0.0.0.0 (ADR-015 §A.4).
+	RemoteListenAddress string
+
+	// MCPResourceServer holds the OAuth 2.1 RS configuration for the remote MCP
+	// endpoint. When non-nil, validates inbound bearer tokens from the user's IdP.
+	// MUST be non-nil when RemoteListenAddress is set.
+	MCPResourceServer *mcpauth.ValidatorConfig
+
+	// MCPAllowedOrigins is the exact-match Origin allowlist for the remote listener.
+	// "*" is never permitted. Empty = no cross-origin (loopback clients only).
+	MCPAllowedOrigins []string
+
+	// MCPAuthorizationServer is the external IdP URL advertised in the PRM
+	// authorization_servers field. Must NOT be Straylight's own issuer (ADR-015).
+	MCPAuthorizationServer string
+
+	// MCPRemoteRateLimit holds optional tighter rate-limit options for the remote
+	// listener (separate from the dashboard/internal surface).
+	MCPRemoteRateLimit Options
 }
 
 // Options holds optional tuning parameters for the server's security middleware.
@@ -188,6 +218,27 @@ func (s *Server) Run() error {
 		close(errCh)
 	}()
 
+	// Start the opt-in remote MCP listener when configured (ADR-015).
+	// When RemoteListenAddress is empty, this is a no-op — existing behavior
+	// is byte-for-byte unchanged.
+	var remoteServer *http.Server
+	if s.cfg.RemoteListenAddress != "" && s.cfg.MCPResourceServer != nil {
+		rs, err := s.buildRemoteServer()
+		if err != nil {
+			s.logger.Error("remote MCP listener: failed to build", "error", err)
+		} else {
+			remoteServer = rs
+			go func() {
+				s.logger.Info("remote MCP listener starting",
+					"address", s.cfg.RemoteListenAddress,
+				)
+				if err := remoteServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					s.logger.Error("remote MCP listener error", "error", err)
+				}
+			}()
+		}
+	}
+
 	select {
 	case err := <-errCh:
 		return err
@@ -204,7 +255,106 @@ func (s *Server) Run() error {
 	if err := httpServer.Shutdown(ctx); err != nil {
 		return err
 	}
+	if remoteServer != nil {
+		if err := remoteServer.Shutdown(ctx); err != nil {
+			s.logger.Error("remote MCP shutdown error", "error", err)
+		}
+	}
 
 	s.logger.Info("server stopped")
 	return nil
+}
+
+// buildRemoteServer constructs the opt-in remote MCP HTTP server (ADR-015).
+// Returns an error if configuration is invalid. Only called when
+// RemoteListenAddress and MCPResourceServer are both set.
+func (s *Server) buildRemoteServer() (*http.Server, error) {
+	// Clone the resource-server config and inject the runtime issuer URL so
+	// New() can enforce role-disjointness against the actual issuer (not just
+	// the legacy sentinel "https://straylight.internal").
+	rsCfg := *s.cfg.MCPResourceServer
+	if rsCfg.OwnIssuerURL == "" && s.cfg.OIDCDiscovery != nil {
+		rsCfg.OwnIssuerURL = s.cfg.OIDCDiscovery.IssuerURL
+	}
+
+	// Wire the egress SSRF guard into the JWKS provider so JWKS fetches to
+	// private/link-local addresses are blocked (finding 3, ADR-014).
+	if rsCfg.JWKSProvider == nil && s.cfg.EgressGuard != nil {
+		rsCfg.JWKSProvider = mcpauth.NewSSRFGatedJWKSProvider(
+			NewEgressSSRFGuard(s.cfg.EgressGuard), nil)
+	}
+
+	// Build the TokenValidator from the MCPResourceServer config.
+	validator, err := mcpauth.New(rsCfg)
+	if err != nil {
+		return nil, fmt.Errorf("remote MCP: token validator: %w", err)
+	}
+
+	handlerCfg := mcphttp.Config{
+		ResourceURI:         s.cfg.MCPResourceServer.Resource,
+		AuthorizationServer: s.cfg.MCPAuthorizationServer,
+		AllowedOrigins:      s.cfg.MCPAllowedOrigins,
+		Validator:           validator,
+	}
+
+	// The remote adapter uses the MCPHandler if it also implements ToolDispatcher.
+	// In production wiring, pass a *mcp.Handler that implements both interfaces.
+	// When nil or the cast fails, tools/call returns "not configured"; the remote
+	// endpoint still serves initialize/tools/list (no tool logic is duplicated).
+	var dispatcher mcphttp.ToolDispatcher
+	if s.cfg.MCPHandler != nil {
+		if td, ok := s.cfg.MCPHandler.(mcphttp.ToolDispatcher); ok {
+			dispatcher = td
+		}
+	}
+
+	mcpHandler, err := mcphttp.NewHandler(handlerCfg, dispatcher)
+	if err != nil {
+		return nil, fmt.Errorf("remote MCP: handler: %w", err)
+	}
+
+	// Remote chain: RequestLogging -> SecurityHeaders -> OriginValidate ->
+	//   RateLimiter -> MaxBodySize -> mcpHandler.
+	// OriginValidate runs BEFORE the rate limiter so DNS-rebinding probes do
+	// not consume rate-limit budget. The PRM endpoint is exempt (public per RFC 9728).
+	// This is SEPARATE from applyMiddlewareChain (which uses CORS, not Origin-reject).
+	prmPath := "/.well-known/oauth-protected-resource"
+	remoteChain := RequestLogging(s.logger,
+		SecurityHeaders(
+			OriginValidate(s.cfg.MCPAllowedOrigins, prmPath)(
+				RateLimiter(
+					rateOrDefault(s.cfg.MCPRemoteRateLimit.RateLimit, 20),
+					rateOrDefault(s.cfg.MCPRemoteRateLimit.Burst, 40),
+				)(
+					MaxBodySize(defaultMaxBodyBytes)(mcpHandler),
+				),
+			),
+		),
+	)
+
+	return &http.Server{
+		Addr:         s.cfg.RemoteListenAddress,
+		Handler:      remoteChain,
+		ReadTimeout:  readTimeout,
+		WriteTimeout: writeTimeout,
+		IdleTimeout:  idleTimeout,
+	}, nil
+}
+
+// mcpHandlerDispatcher is intentionally omitted: the MCPRouteHandler interface
+// is for the internal /api/v1/mcp/* REST API. The remote MCP (mcphttp) dispatcher
+// interface uses mcp.ToolCallRequest + *mcpauth.Identity, which requires a
+// concrete *mcp.Handler with all deps. In production, pass a *mcp.Handler via
+// serve() wiring. In Phase 1, when MCPHandler is set, it is cast to a concrete
+// dispatcher if it implements mcphttp.ToolDispatcher.
+//
+// We leave the dispatcher nil when the cast isn't available: the remote endpoint
+// still serves initialize/tools/list; tools/call returns a "not configured" error.
+
+// rateOrDefault returns val if positive, otherwise returns def.
+func rateOrDefault(val, def int) int {
+	if val > 0 {
+		return val
+	}
+	return def
 }

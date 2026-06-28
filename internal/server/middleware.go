@@ -237,6 +237,37 @@ func SanitizeInput(s string) string {
 	}, s)
 }
 
+// OriginValidate returns a middleware that rejects requests with a missing or
+// disallowed Origin header. Requests to exemptPaths are passed through without
+// an Origin check (e.g. the PRM endpoint /.well-known/oauth-protected-resource
+// is public and must not require an Origin per RFC 9728).
+// This middleware MUST run before the rate limiter so that DNS-rebinding probes
+// do not consume rate-limit budget.
+func OriginValidate(allowedOrigins []string, exemptPaths ...string) func(http.Handler) http.Handler {
+	originSet := make(map[string]bool, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		originSet[o] = true
+	}
+	exemptSet := make(map[string]bool, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exemptSet[p] = true
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if exemptSet[r.URL.Path] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			origin := r.Header.Get("Origin")
+			if origin == "" || !originSet[origin] {
+				WriteError(w, http.StatusForbidden, ErrCodeValidationFailed, "Origin not allowed")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // applyMiddlewareChain wraps the given handler with the security middleware
 // stack in order: SecurityHeaders -> CORS -> RateLimit -> MaxBodySize.
 func applyMiddlewareChain(h http.Handler, opts Options) http.Handler {

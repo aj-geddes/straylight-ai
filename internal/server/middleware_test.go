@@ -414,3 +414,72 @@ func TestRequestLogging_JSONOutput(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// OriginValidate middleware (finding 5)
+// ---------------------------------------------------------------------------
+
+func TestOriginValidate_AllowsListedOrigin(t *testing.T) {
+	allowed := []string{"https://claude.ai"}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := server.OriginValidate(allowed)(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Origin", "https://claude.ai")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("OriginValidate: allowed origin: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestOriginValidate_RejectsMissingOrigin(t *testing.T) {
+	allowed := []string{"https://claude.ai"}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := server.OriginValidate(allowed)(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	// No Origin header.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("OriginValidate: missing origin: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestOriginValidate_RejectsUnlistedOrigin(t *testing.T) {
+	allowed := []string{"https://claude.ai"}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := server.OriginValidate(allowed)(inner)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("OriginValidate: unlisted origin: status = %d, want 403", rec.Code)
+	}
+}
+
+func TestOriginValidate_ExemptsPath(t *testing.T) {
+	allowed := []string{"https://claude.ai"}
+	exemptPath := "/.well-known/oauth-protected-resource"
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := server.OriginValidate(allowed, exemptPath)(inner)
+
+	req := httptest.NewRequest(http.MethodGet, exemptPath, nil)
+	// No Origin — exempt path must pass through.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("OriginValidate: exempt path without Origin: status = %d, want 200", rec.Code)
+	}
+}

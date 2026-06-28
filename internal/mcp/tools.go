@@ -340,7 +340,7 @@ type FileReader interface {
 // When a non-nil policy engine and resolver are provided, the per-service policy
 // is evaluated BEFORE any handler runs and BEFORE any credential is injected.
 // Denied calls return an isError result immediately and emit a policy_denied event.
-func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, s ServiceLister, sc DirectoryScanner, fr FileReader, db DBExecutor, exec CommandExecutor, a audit.Emitter, eng policy.Engine, pr PolicyResolver) ToolCallResult {
+func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, s ServiceLister, sc DirectoryScanner, fr FileReader, db DBExecutor, exec CommandExecutor, a audit.Emitter, eng policy.Engine, pr PolicyResolver, actorSubject string, actorIssuer string) ToolCallResult {
 	// Per-service policy gate: evaluate BEFORE dispatching to any handler.
 	if eng != nil && pr != nil {
 		if polResult := evaluatePolicyGate(req, eng, pr, a); polResult != nil {
@@ -369,7 +369,7 @@ func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, 
 	}
 
 	if a != nil {
-		emitToolCallAuditEvent(a, req, result)
+		emitToolCallAuditEvent(a, req, result, actorSubject, actorIssuer)
 	}
 	return result
 }
@@ -377,13 +377,16 @@ func dispatchToolCall(ctx context.Context, req ToolCallRequest, p ProxyHandler, 
 // emitToolCallAuditEvent emits a tool_call audit event after a tool invocation.
 // It extracts the service name from the arguments (when present) and records
 // the outcome as "success" or "error". Credential values are never included.
-func emitToolCallAuditEvent(a audit.Emitter, req ToolCallRequest, result ToolCallResult) {
+func emitToolCallAuditEvent(a audit.Emitter, req ToolCallRequest, result ToolCallResult, actorSubject string, actorIssuer string) {
 	outcome := "success"
 	if result.IsError {
 		outcome = "error"
 	}
 
 	details := map[string]string{"outcome": outcome}
+	if actorIssuer != "" {
+		details["issuer"] = actorIssuer
+	}
 
 	// Extract path for api_call events (no credential values ever included).
 	if path, ok := stringArg(req.Arguments, "path"); ok {
@@ -393,10 +396,11 @@ func emitToolCallAuditEvent(a audit.Emitter, req ToolCallRequest, result ToolCal
 	service, _ := stringArg(req.Arguments, "service")
 
 	a.Emit(audit.Event{
-		Type:    audit.EventToolCall,
-		Tool:    req.Tool,
-		Service: service,
-		Details: details,
+		Type:      audit.EventToolCall,
+		Tool:      req.Tool,
+		Service:   service,
+		SessionID: actorSubject,
+		Details:   details,
 	})
 }
 
