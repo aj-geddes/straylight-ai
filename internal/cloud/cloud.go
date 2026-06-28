@@ -61,6 +61,16 @@ type ServiceConfig struct {
 	Azure *AzureConfig
 }
 
+// AWSWebIdentityConfig holds the opt-in keyless configuration for AWS
+// AssumeRoleWithWebIdentity (ADR-012 Phase 2). When this block is present in
+// AWSConfig, the keyless path is used; when absent, the static AssumeRole path
+// is used unchanged (backward compatibility).
+type AWSWebIdentityConfig struct {
+	// Audience is the token audience forwarded to the identity source and to
+	// STS as the WebIdentityToken audience. Typically "sts.amazonaws.com".
+	Audience string
+}
+
 // AWSConfig holds AWS-specific configuration for STS AssumeRole.
 type AWSConfig struct {
 	// RoleARN is the IAM role to assume, e.g. "arn:aws:iam::123456789012:role/StrayLightRole".
@@ -76,11 +86,28 @@ type AWSConfig struct {
 	// SessionPolicy is an optional inline IAM policy JSON to scope permissions
 	// below what the role allows. Empty means no further restriction.
 	SessionPolicy string
+
+	// WebIdentity, when non-nil, opts in to the keyless AssumeRoleWithWebIdentity
+	// path (ADR-012 Phase 2). When nil, the existing static AssumeRole path is
+	// used unchanged.
+	WebIdentity *AWSWebIdentityConfig
+}
+
+// GCPWebIdentityConfig holds the opt-in keyless configuration for GCP
+// Workload Identity Federation (ADR-012 Phase 2). When this block is present
+// in GCPConfig, the keyless WIF path is used; when absent, the existing static
+// service-account-JSON path is used unchanged (backward compatibility).
+type GCPWebIdentityConfig struct {
+	// Audience is the workload identity pool provider resource name forwarded
+	// to both the identity source and to GCP STS as the token exchange audience.
+	// Example: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider".
+	Audience string
 }
 
 // GCPConfig holds GCP-specific configuration for access token generation.
 type GCPConfig struct {
 	// ServiceAccountJSON is the content of the service account key JSON file.
+	// Required for the static SA-JSON path; unused when the keyless path is selected.
 	ServiceAccountJSON string
 
 	// ProjectID sets CLOUDSDK_CORE_PROJECT in the resulting env vars.
@@ -93,6 +120,31 @@ type GCPConfig struct {
 	// TokenLifetimeSecs is the requested token lifetime. Range: 0-43200.
 	// Zero defaults to 3600 (1 hour, the GCP default).
 	TokenLifetimeSecs int
+
+	// WebIdentity, when non-nil, opts in to the keyless WIF path (ADR-012
+	// Phase 2). When nil, the existing static SA-JSON path is used unchanged.
+	WebIdentity *GCPWebIdentityConfig
+}
+
+// AzureWebIdentityConfig holds the opt-in keyless configuration for Azure
+// Federated Identity Credentials (ADR-012 Phase 2). When this block is present
+// in AzureConfig, the keyless FIC path is used; when absent, the existing static
+// client_secret path is used unchanged (backward compatibility).
+type AzureWebIdentityConfig struct {
+	// TenantID is the Azure AD tenant (directory) ID for the federated credential.
+	TenantID string
+
+	// ClientID is the application (client) ID registered with the federated
+	// credential (the workload identity).
+	ClientID string
+
+	// Audience is the token audience forwarded to the identity source and to
+	// Azure AD as the expected audience in the jwt-bearer client assertion.
+	// Typically "api://AzureADTokenExchange".
+	Audience string
+
+	// SubscriptionID is the Azure subscription ID for AZURE_SUBSCRIPTION_ID.
+	SubscriptionID string
 }
 
 // AzureConfig holds Azure-specific configuration for client credentials token exchange.
@@ -104,6 +156,7 @@ type AzureConfig struct {
 	ClientID string
 
 	// ClientSecret is the service principal secret. Never included in output env vars.
+	// Not required when the keyless FIC path is used (WebIdentity non-nil).
 	ClientSecret string
 
 	// SubscriptionID sets AZURE_SUBSCRIPTION_ID in the resulting env vars.
@@ -112,6 +165,10 @@ type AzureConfig struct {
 	// Scope is the token audience, e.g. "https://management.azure.com/.default".
 	// Defaults to "https://management.azure.com/.default".
 	Scope string
+
+	// WebIdentity, when non-nil, opts in to the keyless FIC path (ADR-012
+	// Phase 2). When nil, the existing static client_secret path is used unchanged.
+	WebIdentity *AzureWebIdentityConfig
 }
 
 // ---------------------------------------------------------------------------
@@ -126,10 +183,17 @@ type cacheEntry struct {
 
 // Manager coordinates cloud providers and caches temp credentials.
 // It is safe for concurrent use.
+//
+// Lifecycle: CloudManager is wired at startup (see cmd/straylight/main.go and
+// server.Config.CloudManager) but is not yet dispatched from any route handler.
+// Dispatching is pending straylight_exec wiring in issue #14. The Engine that
+// backs the keyless providers runs a background refresh goroutine; callers must
+// call Close when the server shuts down to stop that goroutine cleanly.
 type Manager struct {
 	mu        sync.RWMutex
-	providers map[string]Provider // keyed by cloud type ("aws", "gcp", "azure")
+	providers map[string]Provider    // keyed by cloud type ("aws", "gcp", "azure")
 	cache     map[string]*cacheEntry // keyed by service name
+	stopFn    func()                 // stops background goroutines (Engine.Close); may be nil
 }
 
 // NewManager creates a Manager with the given providers.
@@ -138,6 +202,23 @@ func NewManager(providers map[string]Provider) *Manager {
 	return &Manager{
 		providers: providers,
 		cache:     make(map[string]*cacheEntry),
+	}
+}
+
+// newManagerWithStop creates a Manager that calls stopFn when Close is called.
+// Used by BuildKeylessCloudManager to stop the Engine's background goroutine.
+func newManagerWithStop(providers map[string]Provider, stopFn func()) *Manager {
+	m := NewManager(providers)
+	m.stopFn = stopFn
+	return m
+}
+
+// Close stops any background goroutines owned by this Manager (e.g. the
+// token-exchange Engine's refresh goroutine). Safe to call multiple times.
+// Call Close from the server's graceful-shutdown path to prevent goroutine leaks.
+func (m *Manager) Close() {
+	if m.stopFn != nil {
+		m.stopFn()
 	}
 }
 

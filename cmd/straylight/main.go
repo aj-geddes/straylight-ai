@@ -23,12 +23,16 @@ import (
 	"github.com/straylight-ai/straylight/internal/egress"
 	"github.com/straylight-ai/straylight/internal/mcp"
 	"github.com/straylight-ai/straylight/internal/oauth"
+	"github.com/straylight-ai/straylight/internal/oidc"
 	"github.com/straylight-ai/straylight/internal/policy"
 	"github.com/straylight-ai/straylight/internal/proxy"
 	"github.com/straylight-ai/straylight/internal/sanitizer"
 	"github.com/straylight-ai/straylight/internal/server"
 	"github.com/straylight-ai/straylight/internal/services"
 	"github.com/straylight-ai/straylight/internal/vault"
+
+	"github.com/straylight-ai/straylight/internal/cloud"
+	"github.com/straylight-ai/straylight/internal/tokenexchange"
 )
 
 const (
@@ -169,6 +173,57 @@ func newServeCmd() *cobra.Command {
 			baseURL := fmt.Sprintf("http://localhost:%d", port)
 			oauthHandler := oauth.NewHandler(vaultClient, registry, baseURL)
 
+			// ADR-012 Phase 1: configure OpenBao as OIDC trust root and build the
+			// public discovery document. The issuer URL is the server's public base URL.
+			// External reachability (ingress/tunnel) is a deployment concern.
+			issuerURL := baseURL
+			oidcDiscovery := buildOIDCDiscovery(logger, vaultClient, issuerURL, baseURL)
+
+			// ADR-012 Phase 2: wire the token-exchange Engine + OpenBaoIdentitySource +
+			// three cloud ExchangeAdapters into the cloud Manager. The identity issuer
+			// must be configured (buildOIDCDiscovery above) before the Engine is used.
+			// Services opt in to the keyless path by setting a WebIdentity/WIF/FIC block
+			// in their ServiceConfig; services without that block use the static path.
+			//
+			// Real cloud clients (issue #10): AWS clients use the ambient credential
+			// chain (env vars, instance profiles, IMDS). The keyless path presents an
+			// OpenBao OIDC proof to the cloud STS instead of static admin keys. The
+			// static AWS path (no WebIdentity block) uses the same ambient caller.
+			// GCP and Azure clients post directly to their STS endpoints via HTTPS.
+			awsCallerDefault, awsCallerErr := cloud.NewAWSSTSCallerDefault(ctx, "")
+			if awsCallerErr != nil {
+				logger.Warn("failed to build default AWS STS caller; static+keyless AWS paths unavailable", "error", awsCallerErr)
+				awsCallerDefault = nil
+			}
+
+			var staticSTSClient cloud.STSClient
+			var awsWebIdentityClient tokenexchange.STSWebIdentityClient
+			if awsCallerDefault != nil {
+				staticSTSClient = cloud.NewAWSStaticSTSClientWithCaller(awsCallerDefault)
+				awsWebIdentityClient = cloud.NewAWSWebIdentitySTSClientWithCaller(awsCallerDefault)
+			} else {
+				staticSTSClient = &unavailableSTSClient{reason: "aws sts caller unavailable at startup (issue #14 tracks exec wiring)"}
+				awsWebIdentityClient = &unavailableSTSWebIdentityClient{reason: "aws sts caller unavailable at startup (issue #14 tracks exec wiring)"}
+			}
+
+			gcpSTSClient := cloud.NewGCPSTSClient(nil, "")
+			azureTokenClient := cloud.NewAzureHTTPTokenClient(nil, "")
+
+			// CloudManager is wired into server.Config so route handlers can reach it,
+			// but no route handler dispatches to it yet -- that is pending the
+			// straylight_exec wiring in issue #14. The Manager owns a token-exchange
+			// Engine that runs a background refresh goroutine; Close is called via
+			// defer below so the goroutine does not outlive the serve command.
+			cloudMgr := cloud.BuildKeylessCloudManager(
+				vaultClient,
+				"straylight",
+				awsWebIdentityClient,
+				gcpSTSClient,
+				azureTokenClient,
+				staticSTSClient,
+			)
+			defer cloudMgr.Close() // stops the Engine background refresh goroutine on shutdown
+
 			srv := server.New(server.Config{
 				ListenAddress: listenAddr,
 				Version:       version,
@@ -176,6 +231,8 @@ func newServeCmd() *cobra.Command {
 				Registry:      registry,
 				OAuthHandler:  oauthHandler,
 				MCPHandler:    mcpHandler,
+				OIDCDiscovery: oidcDiscovery,
+				CloudManager:  cloudMgr,
 			})
 			return srv.Run()
 		},
@@ -269,4 +326,80 @@ func newVersionCmd() *cobra.Command {
 			_ = enc.Encode(info)
 		},
 	}
+}
+
+// buildOIDCDiscovery configures OpenBao as an OIDC trust root (ADR-012 Phase 1)
+// and builds the public OIDC discovery document for the server. Errors are
+// logged as warnings; the server will start with an empty JWKS on failure.
+// External reachability of the issuer is a deployment concern.
+func buildOIDCDiscovery(logger *slog.Logger, vaultClient *vault.Client, issuerURL, baseURL string) *oidc.Discovery {
+	if err := vaultClient.ConfigureIdentityIssuer(issuerURL); err != nil {
+		logger.Warn("failed to configure identity issuer", "error", err)
+	}
+
+	if err := vaultClient.CreateIdentityRole("straylight", []string{issuerURL}, "1h", nil); err != nil {
+		logger.Warn("failed to create identity role", "error", err)
+	}
+
+	jwks, err := vaultClient.FetchPublicJWKS()
+	if err != nil {
+		logger.Warn("failed to fetch public JWKS from vault", "error", err)
+		jwks = vault.JWKSet{}
+	}
+
+	oidcKeys := make([]oidc.JWKKey, 0, len(jwks.Keys))
+	for _, k := range jwks.Keys {
+		oidcKeys = append(oidcKeys, oidc.JWKKey{
+			Kty: k.Kty,
+			Kid: k.Kid,
+			Use: k.Use,
+			Alg: k.Alg,
+			N:   k.N,
+			E:   k.E,
+			Crv: k.Crv,
+			X:   k.X,
+			Y:   k.Y,
+		})
+	}
+
+	return &oidc.Discovery{
+		IssuerURL:     issuerURL,
+		JWKSURI:       baseURL + "/.well-known/jwks.json",
+		SupportedAlgs: []string{"RS256"},
+		Keys:          oidcKeys,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Minimal fallback cloud client stubs
+// ---------------------------------------------------------------------------
+//
+// These stubs are used when the ambient AWS credential chain is unavailable at
+// startup (e.g. no IAM role, no env vars). They return a clear structured error
+// instead of panicking. In normal deployments with instance profiles or env
+// credentials, the real SDK-backed clients above are used.
+//
+// NOTE: straylight_exec remains UNWIRED (see NOTE comment above); these stubs
+// are for the cloud Manager only and are not related to exec wiring (issue #14).
+
+// unavailableSTSWebIdentityClient satisfies tokenexchange.STSWebIdentityClient
+// when the AWS caller could not be initialized at startup.
+type unavailableSTSWebIdentityClient struct{ reason string }
+
+func (u *unavailableSTSWebIdentityClient) AssumeRoleWithWebIdentity(
+	_ context.Context,
+	_ tokenexchange.STSAssumeRoleWithWebIdentityInput,
+) (*tokenexchange.STSWebIdentityCredentials, error) {
+	return nil, fmt.Errorf("cloud: aws web-identity STS client not available: %s", u.reason)
+}
+
+// unavailableSTSClient satisfies cloud.STSClient when the AWS caller could not
+// be initialized at startup.
+type unavailableSTSClient struct{ reason string }
+
+func (u *unavailableSTSClient) AssumeRole(
+	_ context.Context,
+	_ cloud.STSAssumeRoleInput,
+) (*cloud.STSCredentials, error) {
+	return nil, fmt.Errorf("cloud: static aws STS client not available: %s", u.reason)
 }

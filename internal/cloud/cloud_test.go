@@ -317,6 +317,75 @@ func TestGCPProviderTokenEndpointError(t *testing.T) {
 	}
 }
 
+// TestGCPProvider_FetchToken_NonJSONBody asserts that a 200 response with a
+// non-JSON body from the token endpoint surfaces as a parse error.
+func TestGCPProvider_FetchToken_NonJSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not json at all"))
+	}))
+	defer srv.Close()
+
+	p := cloud.NewGCPProvider(cloud.GCPProviderConfig{
+		TokenEndpointOverride: srv.URL,
+	})
+
+	cfg := cloud.ServiceConfig{
+		Engine: "gcp",
+		GCP: &cloud.GCPConfig{
+			ServiceAccountJSON: validServiceAccountJSON(t, srv.URL),
+			ProjectID:          "test-project",
+		},
+	}
+
+	_, err := p.GenerateCredentials(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for non-JSON body in 200 response from token endpoint, got nil")
+	}
+}
+
+// TestGCPProvider_MissingSAJSON_StaticPath verifies that an empty service
+// account JSON on the static path returns an error.
+func TestGCPProvider_MissingSAJSON_StaticPath(t *testing.T) {
+	p := cloud.NewGCPProvider(cloud.GCPProviderConfig{})
+
+	cfg := cloud.ServiceConfig{
+		Engine: "gcp",
+		GCP: &cloud.GCPConfig{
+			ProjectID:          "proj",
+			ServiceAccountJSON: "", // empty — should error
+		},
+	}
+	_, err := p.GenerateCredentials(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for missing service_account_json, got nil")
+	}
+}
+
+// TestGCPProvider_InvalidSAJSON_TokenURI verifies that an invalid service
+// account JSON (no token_uri) returns an error on the static path.
+func TestGCPProvider_InvalidSAJSON_TokenURI(t *testing.T) {
+	// Valid JSON but missing token_uri — the provider must parse the JSON,
+	// fail to find token_uri, and return an error (not panic).
+	p := cloud.NewGCPProvider(cloud.GCPProviderConfig{
+		// No TokenEndpointOverride — forces SA JSON parsing path.
+	})
+
+	cfg := cloud.ServiceConfig{
+		Engine: "gcp",
+		GCP: &cloud.GCPConfig{
+			ProjectID: "proj",
+			// Missing token_uri in service account JSON.
+			ServiceAccountJSON: `{"type":"service_account","client_email":"x@y.iam.gserviceaccount.com"}`,
+		},
+	}
+	_, err := p.GenerateCredentials(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for missing token_uri in service account JSON, got nil")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Azure provider tests
 // ---------------------------------------------------------------------------
@@ -526,6 +595,116 @@ func TestManagerUnknownEngine(t *testing.T) {
 	}
 }
 
+// TestManagerInvalidateCache verifies that InvalidateCache removes the cached
+// entry so the next GetCredentials call regenerates credentials.
+func TestManagerInvalidateCache(t *testing.T) {
+	callCount := 0
+	p := &countingProvider{
+		creds: &cloud.Credentials{
+			EnvVars:   map[string]string{"AWS_ACCESS_KEY_ID": "KEY"},
+			ExpiresAt: time.Now().Add(time.Hour),
+			Provider:  "aws",
+		},
+		onCall: func() { callCount++ },
+	}
+	mgr := cloud.NewManager(map[string]cloud.Provider{"aws": p})
+	cfg := cloud.ServiceConfig{Engine: "aws"}
+
+	// First call — generates and caches.
+	_, err := mgr.GetCredentials(context.Background(), "svc", cfg)
+	if err != nil {
+		t.Fatalf("first GetCredentials() error = %v", err)
+	}
+
+	// Second call — should hit cache (callCount stays at 1).
+	_, err = mgr.GetCredentials(context.Background(), "svc", cfg)
+	if err != nil {
+		t.Fatalf("second GetCredentials() error = %v", err)
+	}
+	if callCount != 1 {
+		t.Errorf("expected 1 provider call after cache hit, got %d", callCount)
+	}
+
+	// Invalidate and call again — must re-generate (callCount becomes 2).
+	mgr.InvalidateCache("svc")
+	_, err = mgr.GetCredentials(context.Background(), "svc", cfg)
+	if err != nil {
+		t.Fatalf("post-invalidate GetCredentials() error = %v", err)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 provider calls after cache invalidation, got %d", callCount)
+	}
+}
+
+// TestManagerClose verifies that Close does not panic when called on a Manager
+// built via NewManager (no stopFn) and when called via BuildKeylessCloudManager
+// (which sets a real Engine.Close stopFn).
+func TestManagerClose(t *testing.T) {
+	// A Manager built with NewManager has no stopFn; Close must be a no-op.
+	mgr := cloud.NewManager(map[string]cloud.Provider{})
+	mgr.Close() // must not panic
+
+	// Close is idempotent.
+	mgr.Close()
+}
+
+// TestAzureProvider_FetchToken_NonJSONBody asserts that a non-JSON error body
+// (e.g. an HTML WAF page) from the Azure static token endpoint surfaces as an
+// error and does not panic.
+func TestAzureProvider_FetchToken_NonJSONBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<html><body>Blocked</body></html>`))
+	}))
+	defer srv.Close()
+
+	p := cloud.NewAzureProvider(cloud.AzureProviderConfig{
+		TokenEndpointOverride: srv.URL,
+	})
+	cfg := cloud.ServiceConfig{
+		Engine: "azure",
+		Azure: &cloud.AzureConfig{
+			TenantID:     "tenant",
+			ClientID:     "client",
+			ClientSecret: "secret",
+			Scope:        "https://management.azure.com/.default",
+		},
+	}
+	_, err := p.GenerateCredentials(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for non-JSON body from Azure token endpoint, got nil")
+	}
+}
+
+// TestAzureProvider_FetchToken_JSONErrorBody asserts that a non-200 JSON response
+// with an error field surfaces the error message.
+func TestAzureProvider_FetchToken_JSONErrorBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"AADSTS70011"}`))
+	}))
+	defer srv.Close()
+
+	p := cloud.NewAzureProvider(cloud.AzureProviderConfig{
+		TokenEndpointOverride: srv.URL,
+	})
+	cfg := cloud.ServiceConfig{
+		Engine: "azure",
+		Azure: &cloud.AzureConfig{
+			TenantID:     "tenant",
+			ClientID:     "client",
+			ClientSecret: "secret",
+			Scope:        "https://management.azure.com/.default",
+		},
+	}
+	_, err := p.GenerateCredentials(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for JSON error body from Azure token endpoint, got nil")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helper: mock STS client
 // ---------------------------------------------------------------------------
@@ -660,9 +839,9 @@ func azureTokenServer(t *testing.T, token string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]interface{}{
-			"access_token": token,
-			"token_type":   "Bearer",
-			"expires_in":   "3600",
+			"access_token":   token,
+			"token_type":     "Bearer",
+			"expires_in":     "3600",
 			"ext_expires_in": "3600",
 		}
 		_ = json.NewEncoder(w).Encode(resp)

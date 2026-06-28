@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/straylight-ai/straylight/internal/tokenexchange"
 )
 
 const (
@@ -15,6 +17,10 @@ const (
 
 	// awsSessionName is the RoleSessionName passed to STS AssumeRole.
 	awsSessionName = "straylight-exec"
+
+	// awsDefaultAudience is the STS audience used when none is specified in
+	// the WebIdentity config.
+	awsDefaultAudience = "sts.amazonaws.com"
 )
 
 // STSAssumeRoleInput holds the parameters for an STS AssumeRole call.
@@ -51,38 +57,108 @@ type STSClient interface {
 
 // AWSProviderConfig holds dependencies for the AWSProvider.
 type AWSProviderConfig struct {
-	// STSClient is the STS API client. Required.
+	// STSClient is the STS API client for the static AssumeRole path. Required
+	// for the static path; unused when the keyless path is selected.
 	STSClient STSClient
+
+	// Engine is the token-exchange engine for the keyless
+	// AssumeRoleWithWebIdentity path (ADR-012 Phase 2). When nil, the keyless
+	// path cannot be selected even if AWSConfig.WebIdentity is set.
+	Engine *tokenexchange.Engine
 }
 
-// AWSProvider generates temporary AWS credentials via STS AssumeRole.
+// AWSProvider generates temporary AWS credentials via STS.
+// It supports two paths:
+//   - Static path (default): STS AssumeRole using admin credentials from vault.
+//   - Keyless path (ADR-012): STS AssumeRoleWithWebIdentity using an OpenBao
+//     OIDC identity token — no static admin keys required.
+//
+// The keyless path is selected when AWSConfig.WebIdentity is non-nil and an
+// Engine is configured. Otherwise the static path is used unchanged.
 type AWSProvider struct {
-	sts STSClient
+	sts    STSClient
+	engine *tokenexchange.Engine
 }
 
 // NewAWSProvider creates an AWSProvider with the given configuration.
 func NewAWSProvider(cfg AWSProviderConfig) *AWSProvider {
 	return &AWSProvider{
-		sts: cfg.STSClient,
+		sts:    cfg.STSClient,
+		engine: cfg.Engine,
 	}
 }
 
 // CloudType implements Provider.
 func (p *AWSProvider) CloudType() string { return "aws" }
 
-// GenerateCredentials calls STS AssumeRole with the configured role ARN and
-// returns temporary credentials as AWS_* environment variables.
+// GenerateCredentials returns temporary AWS credentials as AWS_* environment
+// variables.
 //
-// The admin/root AWS credentials used to call STS are never included in the
-// returned Credentials struct — only the temp credentials are returned.
+// Branch logic (ADR-012 backward compat guarantee):
+//   - If cfg.AWS.WebIdentity is non-nil AND an Engine is configured → keyless
+//     path via STS AssumeRoleWithWebIdentity (no static admin keys used).
+//   - Otherwise → existing static AssumeRole path, UNCHANGED.
+//
+// The admin/root AWS credentials used to call the static AssumeRole path are
+// never included in the returned Credentials struct.
 func (p *AWSProvider) GenerateCredentials(ctx context.Context, cfg ServiceConfig) (*Credentials, error) {
 	if cfg.AWS == nil {
 		return nil, fmt.Errorf("cloud: aws config is required for engine %q", cfg.Engine)
 	}
 
-	awsCfg := cfg.AWS
+	// ── Keyless branch (ADR-012 Phase 2) ──────────────────────────────────
+	if cfg.AWS.WebIdentity != nil && p.engine != nil {
+		return p.generateKeylessCredentials(ctx, cfg.AWS)
+	}
 
-	// Apply defaults.
+	// ── Static branch (unchanged from pre-ADR-012) ─────────────────────────
+	return p.generateStaticCredentials(ctx, cfg.AWS)
+}
+
+// generateKeylessCredentials implements the ADR-012 Phase 2 keyless path.
+// It delegates to the token-exchange Engine, which calls the OpenBao identity
+// source for a proof token and then calls the AWSWebIdentityAdapter to exchange
+// it for STS credentials via AssumeRoleWithWebIdentity.
+func (p *AWSProvider) generateKeylessCredentials(ctx context.Context, awsCfg *AWSConfig) (*Credentials, error) {
+	audience := awsCfg.WebIdentity.Audience
+	if audience == "" {
+		audience = awsDefaultAudience
+	}
+
+	region := awsCfg.Region
+	if region == "" {
+		region = awsDefaultRegion
+	}
+
+	in := tokenexchange.ExchangeInput{
+		Audience: audience,
+		Params: map[string]string{
+			"role_arn":     awsCfg.RoleARN,
+			"session_name": awsSessionName,
+			"region":       region,
+		},
+		RequestedTTL: time.Duration(awsCfg.SessionDurationSecs) * time.Second,
+	}
+	if awsCfg.SessionPolicy != "" {
+		in.Params["policy"] = awsCfg.SessionPolicy
+	}
+
+	exchanged, err := p.engine.Credential(ctx, awsCfg.RoleARN, "aws", in)
+	if err != nil {
+		return nil, fmt.Errorf("cloud: aws: keyless exchange for role %q: %w", awsCfg.RoleARN, err)
+	}
+
+	return &Credentials{
+		EnvVars:   exchanged.EnvVars,
+		ExpiresAt: exchanged.ExpiresAt,
+		Provider:  "aws",
+		Scope:     exchanged.Scope,
+	}, nil
+}
+
+// generateStaticCredentials is the existing pre-ADR-012 AssumeRole path,
+// unchanged. Admin AWS credentials (stored in vault) are used to call STS.
+func (p *AWSProvider) generateStaticCredentials(ctx context.Context, awsCfg *AWSConfig) (*Credentials, error) {
 	duration := awsCfg.SessionDurationSecs
 	if duration <= 0 {
 		duration = awsDefaultSessionDurationSecs
